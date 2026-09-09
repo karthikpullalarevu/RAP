@@ -43,7 +43,7 @@ def get_driving_command(
     route_roadblock_ids: List[str],
     distance: float = 20,
     lateral_offset: float = 2,
-) -> npt.NDArray[np.int]:
+) -> npt.NDArray[np.intp]:
     """
     Creates the one-hot (left, forward, right, unknown) driving command for the ego vehicle
     :param ego_pose: (x, y, heading) object for global ego pose

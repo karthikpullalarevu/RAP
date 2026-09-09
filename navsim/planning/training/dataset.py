@@ -15,11 +15,17 @@ import shutil
 import cv2
 from scipy.signal import savgol_filter
 
-from waymo_open_dataset import dataset_pb2 as open_dataset
-from waymo_open_dataset.wdl_limited.camera.ops import py_camera_model_ops
+try:
+    from waymo_open_dataset import dataset_pb2 as open_dataset
+    from waymo_open_dataset.wdl_limited.camera.ops import py_camera_model_ops
+    from waymo_open_dataset.protos import end_to_end_driving_data_pb2 as wod_e2ed_pb2
+    from waymo_open_dataset.protos import end_to_end_driving_submission_pb2 as wod_e2ed_submission_pb2
+except (ImportError, Exception):
+    open_dataset = None
+    py_camera_model_ops = None
+    wod_e2ed_pb2 = None
+    wod_e2ed_submission_pb2 = None
 import json
-from waymo_open_dataset.protos import end_to_end_driving_data_pb2 as wod_e2ed_pb2
-from waymo_open_dataset.protos import end_to_end_driving_submission_pb2 as wod_e2ed_submission_pb2
 from navsim.common.dataclasses import AgentInput, EgoStatus, Cameras, Lidar, Camera
 logger = logging.getLogger(__name__)
 

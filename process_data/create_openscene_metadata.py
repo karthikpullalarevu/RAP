@@ -509,7 +509,7 @@ def parse_args():
 
 
 
-def load_done_set(checkpoint_path='checkpoint.txt') -> set[int]:
+def load_done_set(checkpoint_path='checkpoint_ego.txt') -> set[int]:
     """读取已完成 index 集合（若文件不存在，则返回空集合）"""
     if not os.path.exists(checkpoint_path):
         return set()
@@ -517,7 +517,7 @@ def load_done_set(checkpoint_path='checkpoint.txt') -> set[int]:
         return {int(line.strip()) for line in f if line.strip().isdigit()}
 
 
-def append_done(idx: int, checkpoint_path='checkpoint.txt') -> None:
+def append_done(idx: int, checkpoint_path='checkpoint_ego.txt') -> None:
     """将新完成的 index 追加到 checkpoint 文件"""
     with open(checkpoint_path, "a") as f:
         f.write(f"{idx}\n")
