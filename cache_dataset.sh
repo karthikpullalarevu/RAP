@@ -20,6 +20,7 @@ export NAVSIM_DEVKIT_ROOT="/datahdd/karthik/RAP/navsim"
 export HYDRA_FULL_ERROR=1
 
 SENSOR_BLOBS="/datahdd/karthik/dataset/nuplan-v1.1/sensor_blobs"
+SENSOR_SPLIT="trainval"  # on-disk folder name (was renamed from navtrain)
 CACHE_ROOT="./cache"
 
 mkdir -p "$CACHE_ROOT" exp
@@ -37,7 +38,7 @@ run_ego() {
         experiment_name=trainval_test \
         worker=single_machine_thread_pool \
         worker.max_workers=64 \
-        sensor_blobs_path=$SENSOR_BLOBS/$SPLIT \
+        sensor_blobs_path=$SENSOR_BLOBS/$SENSOR_SPLIT \
         cache_path=$CACHE_ROOT/rap_ego
 }
 
@@ -56,7 +57,7 @@ run_aug() {
         experiment_name=trainval_test \
         worker=single_machine_thread_pool \
         worker.max_workers=64 \
-        sensor_blobs_path=/datahdd/karthik/dataset/nuplan-v1.1/rendered_sensor_blobs_augmented/$SPLIT \
+        sensor_blobs_path=/datahdd/karthik/dataset/nuplan-v1.1/rendered_sensor_blobs_augmented/$SENSOR_SPLIT \
         cache_path=$CACHE_ROOT/rap_aug
 }
 
@@ -75,7 +76,7 @@ run_perturb() {
         experiment_name=trainval_test \
         worker=single_machine_thread_pool \
         worker.max_workers=64 \
-        sensor_blobs_path=$SENSOR_BLOBS/$SPLIT \
+        sensor_blobs_path=$SENSOR_BLOBS/$SENSOR_SPLIT \
         cache_path=$CACHE_ROOT/rap_perturbed
 }
 
