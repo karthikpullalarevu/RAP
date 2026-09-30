@@ -31,6 +31,7 @@ for t in "$TARS"/pedestrian_two_ped_v4_batch2_part_*.tar; do
     missing=0
     while read -r scene; do
         [ -z "$scene" ] && continue
+        scene=${scene#pedestrian_two_ped_v4_batch2/}
         [ -d "$RAW/$scene" ] || { echo "  MISSING $scene"; missing=$((missing+1)); }
     done < "$TARS/lists/part_$part.txt"
     [ "$missing" -eq 0 ] && touch "$DONE/part_$part.done" || echo "  $missing missing in $name"
@@ -38,7 +39,7 @@ done
 
 # --- Batch 1: move scene folders + keep top-level files ---
 if [ -d "$B1" ]; then
-    find "$B1" -maxdepth 1 -type f -exec cp -n {} "$META/v4_500/" \;
+    find "$B1" -maxdepth 1 -type f -exec cp --update=none {} "$META/v4_500/" \;
     n=0
     for d in "$B1"/*/; do
         s=$(basename "$d")
