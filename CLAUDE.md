@@ -13,6 +13,11 @@
 - When suggesting a plan, list clear steps I can follow
 - Ask before doing anything that can't be undone
 
+## Reporting Units
+- Report all speeds in **mph** (miles per hour), not m/s — tables are shown to an audience (1 m/s = 2.237 mph)
+- Keep distances in metres
+- For braking, give m/s² with the mph-per-second value next to it (1 m/s² = 2.237 mph/s)
+
 ## Long-Running Tasks
 - If a task will take more than 5 minutes, run it inside a **tmux session** (not as a background task)
 - Use `tmux new-session -d -s <name>` to create, `tmux send-keys` to run commands
