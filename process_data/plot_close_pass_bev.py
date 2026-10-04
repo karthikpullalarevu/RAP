@@ -252,6 +252,43 @@ def gap_speed_heatmap(closest, out_path):
     print(f"Saved {out_path}")
 
 
+def gap_histograms(closest, out_path):
+    """Histogram of the closest gap, one row per ego-speed range (one count per sequence)."""
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    groups = [("Ego stopped (<1 mph)", -1, 1), ("Ego 1–5 mph", 1, 5), ("Ego 5–10 mph", 5, 10),
+              ("Ego 10–20 mph", 10, 20), ("Ego over 20 mph", 20, 999)]
+    bins = np.arange(0, 10.25, 0.25)
+    fig, axes = plt.subplots(len(groups), 1, figsize=(10, 11), sharex=True, sharey=True)
+    for ax, (name, lo, hi) in zip(axes, groups):
+        g = closest[(closest.mph > lo) & (closest.mph <= hi)].gap_m
+        ax.hist(g, bins=bins, color=EGO_C, edgecolor="white", linewidth=0.8)
+        ax.axvline(1, color=INK, lw=1.2, ls=(0, (4, 3)))
+        under = int((g < 1).sum())
+        ax.text(0.995, 0.9, name, transform=ax.transAxes, ha="right", va="top", fontsize=13, fontweight="bold", color=INK)
+        ax.text(0.995, 0.66, f"{len(g):,} sequences\n{under:,} under 1 m ({100 * under / max(len(g), 1):.0f}%)",
+                transform=ax.transAxes, ha="right", va="top", fontsize=11, color=MUTED)
+        ax.set_ylabel("Sequences", fontsize=10)
+        ax.grid(axis="y", color="#e5e5e5", linewidth=0.6)
+        ax.set_axisbelow(True)
+        for sp in ("top", "right"):
+            ax.spines[sp].set_visible(False)
+    axes[0].text(1.08, axes[0].get_ylim()[1] * 0.98, "1 m", fontsize=10, color=INK, va="top")
+    axes[-1].set_xlabel("Closest gap between car and pedestrian (m)", fontsize=12)
+    axes[-1].set_xticks(range(0, 11))
+    axes[-1].set_xlim(0, 10)
+    fig.suptitle(f"Closest gap to a pedestrian, by ego speed at that moment ({len(closest):,} sequences)",
+                 fontsize=14, fontweight="bold", y=0.995)
+    fig.text(0.5, 0.004, "One count per sequence, at the moment the pedestrian is closest. Bars are 0.25 m wide. "
+             "Gap is car edge to pedestrian edge.", ha="center", fontsize=9.5, color=MUTED)
+    fig.tight_layout(rect=(0, 0.02, 1, 0.975))
+    fig.savefig(out_path, dpi=150)
+    plt.close(fig)
+    print(f"Saved {out_path}")
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--batch-root", type=Path, default=Path("/datahdd2/karthik/ped_v2/raw"))
@@ -287,6 +324,7 @@ def main():
     bev_grid(picks, args.batch_root, out / "bev_close_passes.png", args.workers, args.cols)
     speed_distance_hist(frames, out / "speed_vs_distance_mph.png")
     gap_speed_heatmap(closest, out / "gap_vs_speed_closest_moment.png")
+    gap_histograms(closest, out / "gap_histogram_by_speed.png")
 
 
 if __name__ == "__main__":
