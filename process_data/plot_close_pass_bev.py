@@ -121,7 +121,7 @@ def draw_panel(ax, d, row):
             fontsize=8, color=MUTED, va="top", ha="left")
 
 
-def bev_grid(picks, batch_root, out_path, workers):
+def bev_grid(picks, batch_root, out_path, workers, cols=9):
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
@@ -132,7 +132,6 @@ def bev_grid(picks, batch_root, out_path, workers):
     with ProcessPoolExecutor(workers) as ex:
         tracks = list(ex.map(extract, jobs))
 
-    cols = 8
     rows = math.ceil(len(picks) / cols)
     fig, axes = plt.subplots(rows, cols, figsize=(2.3 * cols, 4.0 * rows))
     for ax in np.ravel(axes):
@@ -151,7 +150,7 @@ def bev_grid(picks, batch_root, out_path, workers):
         Line2D([], [], color=PED_C, marker="o", ms=8, lw=0, mfc="none", label="Pedestrian 1 s earlier"),
     ]
     fig.legend(handles=handles, loc="upper center", ncol=4, frameon=False, fontsize=11, bbox_to_anchor=(0.5, 0.985))
-    fig.suptitle("Close passes: ego within 1 m of a pedestrian while moving (48 random sequences, slow → fast)",
+    fig.suptitle(f"Close passes: ego within 1 m of a pedestrian while moving ({len(picks)} random sequences, slow → fast)",
                  fontsize=15, fontweight="bold", y=0.998)
     fig.text(0.5, 0.012, "Each panel is 14 m wide × 20 m tall, ego frame, ego pointing up.",
              ha="center", fontsize=10, color=MUTED)
@@ -190,6 +189,7 @@ def main():
     ap.add_argument("--batch-root", type=Path, default=Path("/datahdd2/karthik/ped_v2/raw"))
     ap.add_argument("--analysis-dir", type=Path, default=Path("/datahdd2/karthik/ped_v2/analysis"))
     ap.add_argument("--per-bin", type=int, default=12)
+    ap.add_argument("--cols", type=int, default=9)
     ap.add_argument("--workers", type=int, default=16)
     ap.add_argument("--seed", type=int, default=0)
     args = ap.parse_args()
@@ -207,8 +207,16 @@ def main():
     print(f"{len(close)} sequences under 1 m while moving (>1 mph)")
 
     picks = pd.concat(close[(close.mph > lo) & (close.mph <= hi)].sample(args.per_bin, random_state=args.seed)
-                      for lo, hi in SPEED_BINS).sort_values("mph")
-    bev_grid(picks, args.batch_root, out / "bev_close_passes.png", args.workers)
+                      for lo, hi in SPEED_BINS)
+    # top up with extra sequences (spread over the speed bins) so the last row of the grid is full
+    extra = -len(picks) % args.cols
+    rest = close.drop(picks.index)
+    for i in range(extra):
+        lo, hi = SPEED_BINS[[1, 2, 0, 3][i % 4]]
+        add = rest[(rest.mph > lo) & (rest.mph <= hi)].sample(1, random_state=args.seed + 1 + i)
+        picks, rest = pd.concat([picks, add]), rest.drop(add.index)
+    picks = picks.sort_values("mph")
+    bev_grid(picks, args.batch_root, out / "bev_close_passes.png", args.workers, args.cols)
     speed_distance_hist(frames, out / "speed_vs_distance_mph.png")
 
 
