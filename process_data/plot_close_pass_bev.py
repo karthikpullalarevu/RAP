@@ -289,6 +289,42 @@ def gap_histograms(closest, out_path):
     print(f"Saved {out_path}")
 
 
+def gap_vs_speed_scatter(closest, out_path):
+    """One dot per sequence at its closest moment: x = ego speed (mph), y = gap to the pedestrian (m)."""
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    from matplotlib.patches import Rectangle
+
+    fig, ax = plt.subplots(figsize=(11, 7.5))
+    ax.scatter(closest.mph, closest.gap_m, s=9, color=EGO_C, alpha=0.3, linewidths=0)
+    xmax = math.ceil(closest.mph.max() / 5) * 5
+    near = closest[(closest.gap_m < 1) & (closest.mph > 10)]
+    ax.add_patch(Rectangle((10, 0), xmax - 10, 1, fill=False, ec=INK, lw=2, zorder=5))
+    ax.text(xmax - 0.4, 1.12, f"Near-miss zone: under 1 m at over 10 mph — {len(near):,} sequences "
+            f"({100 * len(near) / len(closest):.0f}%)", ha="right", va="bottom", fontsize=11.5, fontweight="bold",
+            color=INK, bbox=dict(boxstyle="round,pad=0.25", fc="white", ec="none", alpha=0.85), zorder=6)
+    ax.axhline(1, color=INK, lw=1, ls=(0, (4, 3)), zorder=4)
+    ax.set_xlim(-0.6, xmax)
+    ax.set_ylim(0, 10.2)
+    ax.set_yticks(range(0, 11))
+    ax.set_xlabel("Ego speed at the closest moment (mph)", fontsize=12)
+    ax.set_ylabel("Distance to pedestrian at the closest moment (m)", fontsize=12)
+    ax.grid(color="#e5e5e5", linewidth=0.6)
+    ax.set_axisbelow(True)
+    for sp in ("top", "right"):
+        ax.spines[sp].set_visible(False)
+    ax.set_title(f"Distance to pedestrian vs ego speed — one dot per sequence ({len(closest):,} sequences)",
+                 fontsize=14, fontweight="bold", pad=12)
+    fig.text(0.5, 0.005, "Each dot is one sequence at the moment the pedestrian is closest. "
+             "Distance is car edge to pedestrian edge. Darker = more sequences.",
+             ha="center", fontsize=9.5, color=MUTED)
+    fig.tight_layout(rect=(0, 0.025, 1, 1))
+    fig.savefig(out_path, dpi=150)
+    plt.close(fig)
+    print(f"Saved {out_path}")
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--batch-root", type=Path, default=Path("/datahdd2/karthik/ped_v2/raw"))
@@ -325,6 +361,7 @@ def main():
     speed_distance_hist(frames, out / "speed_vs_distance_mph.png")
     gap_speed_heatmap(closest, out / "gap_vs_speed_closest_moment.png")
     gap_histograms(closest, out / "gap_histogram_by_speed.png")
+    gap_vs_speed_scatter(closest, out / "distance_vs_speed_scatter.png")
 
 
 if __name__ == "__main__":
