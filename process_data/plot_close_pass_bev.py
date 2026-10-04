@@ -199,6 +199,59 @@ def speed_distance_hist(frames, out_path):
     print(f"Saved {out_path}")
 
 
+def gap_speed_heatmap(closest, out_path):
+    """One count per sequence at its closest moment: gap (columns) x ego speed (rows), numbers in cells."""
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    from matplotlib.colors import LinearSegmentedColormap
+    from matplotlib.patches import Rectangle
+
+    gap_lab = ["under 0.5 m", "0.5–1 m", "1–2 m", "2–5 m", "5–10 m"]
+    spd_lab = ["stopped\n(<1 mph)", "1–5 mph", "5–10 mph", "10–20 mph", "over 20 mph"]
+    g = pd.cut(closest.gap_m, [-1, 0.5, 1, 2, 5, 1e9], labels=gap_lab)
+    v = pd.cut(closest.mph, [-1, 1, 5, 10, 20, 999], labels=spd_lab)
+    t = pd.crosstab(v, g).reindex(index=spd_lab, columns=gap_lab, fill_value=0)
+    n = int(t.values.sum())
+
+    blues = LinearSegmentedColormap.from_list("seq_blue", ["#eef5fe", "#cde2fb", "#86b6ef", "#2a78d6", "#1c5cab"])
+    fig, ax = plt.subplots(figsize=(11, 6.6))
+    ax.imshow(t.values, cmap=blues, origin="lower", aspect="auto", vmin=0, vmax=t.values.max())
+    for i in range(t.shape[0]):
+        for j in range(t.shape[1]):
+            c = int(t.values[i, j])
+            dark = c > 0.6 * t.values.max()
+            ax.text(j, i + 0.08, f"{c:,}", ha="center", va="center", fontsize=17, fontweight="bold",
+                    color="white" if dark else INK)
+            ax.text(j, i - 0.24, f"{100 * c / n:.1f}%", ha="center", va="center", fontsize=10,
+                    color="white" if dark else MUTED)
+    # white gaps between cells
+    ax.set_xticks(np.arange(-0.5, t.shape[1]), minor=True)
+    ax.set_yticks(np.arange(-0.5, t.shape[0]), minor=True)
+    ax.grid(which="minor", color="white", linewidth=3)
+    ax.tick_params(which="both", length=0)
+    ax.set_xticks(range(t.shape[1]), gap_lab, fontsize=12)
+    ax.set_yticks(range(t.shape[0]), spd_lab, fontsize=12)
+    ax.set_xlabel("Closest gap between car and pedestrian", fontsize=12, labelpad=10)
+    ax.set_ylabel("Ego speed at that moment", fontsize=12, labelpad=10)
+    for sp in ax.spines.values():
+        sp.set_visible(False)
+
+    # near-miss zone: under 1 m and over 10 mph
+    near = int(t.iloc[3:, :2].values.sum())
+    ax.add_patch(Rectangle((-0.5, 2.5), 2, 2, fill=False, ec=INK, lw=2.5, zorder=5, clip_on=False))
+    ax.text(-0.5, 4.58, f"Near-miss zone: under 1 m at over 10 mph — {near:,} sequences ({100 * near / n:.0f}%)",
+            fontsize=11.5, fontweight="bold", color=INK, va="bottom", ha="left", clip_on=False)
+    fig.suptitle(f"How close and how fast: {n:,} sequences at their closest moment to a pedestrian",
+                 fontsize=14, fontweight="bold", x=0.5, y=0.985)
+    fig.text(0.5, 0.005, "Number = sequences, small number = share of all sequences. Gap is car edge to pedestrian edge. "
+             "Bin widths are uneven.", ha="center", fontsize=9.5, color=MUTED)
+    fig.tight_layout(rect=(0, 0.03, 1, 0.93))
+    fig.savefig(out_path, dpi=150)
+    plt.close(fig)
+    print(f"Saved {out_path}")
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--batch-root", type=Path, default=Path("/datahdd2/karthik/ped_v2/raw"))
@@ -233,6 +286,7 @@ def main():
     picks = picks.sort_values("mph")
     bev_grid(picks, args.batch_root, out / "bev_close_passes.png", args.workers, args.cols)
     speed_distance_hist(frames, out / "speed_vs_distance_mph.png")
+    gap_speed_heatmap(closest, out / "gap_vs_speed_closest_moment.png")
 
 
 if __name__ == "__main__":
