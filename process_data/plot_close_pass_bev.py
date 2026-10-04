@@ -115,8 +115,10 @@ def draw_panel(ax, d, row):
     ax.set_yticks([])
     for sp in ax.spines.values():
         sp.set_color("#cccccc")
-    ax.set_title(f"gap {row.gap_m:.2f} m · ego {row.mph:.0f} mph · ped {row.ped_mph:.0f} mph",
-                 fontsize=7.5, color=INK, pad=4)
+    ax.set_title(f"gap {row.gap_m:.2f} m\nego {row.mph:.0f} mph",
+                 fontsize=13, fontweight="bold", color=INK, pad=5, linespacing=1.15)
+    ax.text(0.04, 0.97, f"ped {row.ped_mph:.0f} mph", transform=ax.transAxes,
+            fontsize=8, color=MUTED, va="top", ha="left")
 
 
 def bev_grid(picks, batch_root, out_path, workers):
@@ -132,7 +134,7 @@ def bev_grid(picks, batch_root, out_path, workers):
 
     cols = 8
     rows = math.ceil(len(picks) / cols)
-    fig, axes = plt.subplots(rows, cols, figsize=(2.3 * cols, 3.6 * rows))
+    fig, axes = plt.subplots(rows, cols, figsize=(2.3 * cols, 4.0 * rows))
     for ax in np.ravel(axes):
         ax.axis("off")
     for ax, d, row in zip(np.ravel(axes), tracks, picks.itertuples()):
@@ -153,7 +155,7 @@ def bev_grid(picks, batch_root, out_path, workers):
                  fontsize=15, fontweight="bold", y=0.998)
     fig.text(0.5, 0.012, "Each panel is 14 m wide × 20 m tall, ego frame, ego pointing up.",
              ha="center", fontsize=10, color=MUTED)
-    fig.tight_layout(rect=(0, 0.02, 1, 0.955), h_pad=1.6)
+    fig.tight_layout(rect=(0, 0.02, 1, 0.955), h_pad=1.2)
     fig.savefig(out_path, dpi=130)
     plt.close(fig)
     print(f"Saved {out_path}")
