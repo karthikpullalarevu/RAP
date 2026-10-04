@@ -105,11 +105,12 @@ def main():
     ap.add_argument("--workers", type=int, default=8)
     ap.add_argument("--score-procs", type=int, default=32)
     ap.add_argument("--limit", type=int, default=None)
+    ap.add_argument("--tag", default="", help="Suffix for the output folder, e.g. epoch12 -> ped_val_batch3_epoch12")
     args = ap.parse_args()
 
     from navsim.planning.training.dataset import CacheOnlyDataset
 
-    out_dir = EXPERIMENTS_ROOT / args.exp_name / "ped_val_batch3"
+    out_dir = EXPERIMENTS_ROOT / args.exp_name / ("ped_val_batch3" + (f"_{args.tag}" if args.tag else ""))
     out_dir.mkdir(parents=True, exist_ok=True)
 
     agent = load_agent(args.ckpt, not args.no_distill, not args.no_pdm)
