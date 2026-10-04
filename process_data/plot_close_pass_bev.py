@@ -299,12 +299,6 @@ def gap_vs_speed_scatter(closest, out_path):
     fig, ax = plt.subplots(figsize=(11, 7.5))
     ax.scatter(closest.mph, closest.gap_m, s=9, color=EGO_C, alpha=0.3, linewidths=0)
     xmax = math.ceil(closest.mph.max() / 5) * 5
-    near = closest[(closest.gap_m < 1) & (closest.mph > 10)]
-    ax.add_patch(Rectangle((10, 0), xmax - 10, 1, fill=False, ec=INK, lw=2, zorder=5))
-    ax.text(xmax - 0.4, 1.12, f"Near-miss zone: under 1 m at over 10 mph — {len(near):,} sequences "
-            f"({100 * len(near) / len(closest):.0f}%)", ha="right", va="bottom", fontsize=11.5, fontweight="bold",
-            color=INK, bbox=dict(boxstyle="round,pad=0.25", fc="white", ec="none", alpha=0.85), zorder=6)
-    ax.axhline(1, color=INK, lw=1, ls=(0, (4, 3)), zorder=4)
     ax.set_xlim(-0.6, xmax)
     ax.set_ylim(0, 10.2)
     ax.set_yticks(range(0, 11))
