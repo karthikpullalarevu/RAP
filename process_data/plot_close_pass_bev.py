@@ -36,6 +36,7 @@ HZ = 20
 PAST, FUT_EGO, FUT_PED, GHOST = 2 * HZ, 4 * HZ, 2 * HZ, 1 * HZ
 SPEED_BINS = [(1, 5), (5, 10), (10, 20), (20, 99)]      # mph
 EGO_C, PED_C, INK, MUTED = "#2a78d6", "#eb6834", "#222222", "#777777"
+YMIN = -9   # bottom of each panel, metres behind ego centre
 
 
 def extract(args):
@@ -58,6 +59,7 @@ def extract(args):
         return dx * c - dy * s, dx * s + dy * c
 
     ego, ped = {}, {}
+    ghost_mph = data[t0 - GHOST].ego_state.dynamic_car_state.speed * MPH if t0 >= GHOST else None
     for f in range(max(0, t0 - PAST), min(len(data), t0 + FUT_EGO + 1)):
         e = data[f].ego_state
         ego[f - t0] = (*local(e.center.x, e.center.y), e.center.heading - h)
@@ -66,6 +68,7 @@ def extract(args):
                 ped[f - t0] = local(o.center.x, o.center.y)
     box = ego0.car_footprint.oriented_box
     return {"scene": scene_dir.name, "ego": ego, "ped": ped, "length": box.length, "width": box.width,
+            "ghost_mph": ghost_mph,
             "ped_radius": max(ped0.box.length, ped0.box.width) / 2}
 
 
@@ -93,6 +96,18 @@ def draw_panel(ax, d, row):
     if -GHOST in ego.index:
         g = ego.loc[-GHOST]
         ego_rect(g.x, g.y, g.h, fill=False, ec=EGO_C, lw=1, ls=(0, (3, 2)), alpha=0.7)
+        if d["ghost_mph"] is not None:
+            # speed 1 s earlier, written in the dashed box. If that box overlaps the ego box (slow)
+            # put it just below; if it is off the panel (fast) pin it to the bottom edge.
+            L = d["length"] / 2
+            if g.x > -2 * L:
+                ty = g.x - L - 1.1
+            else:
+                ty = max(g.x, YMIN + 1.2)
+            tx = -g.y if g.x >= YMIN + 1.2 else 0.0
+            ax.text(tx, ty, f"{d['ghost_mph']:.0f}\nmph", ha="center", va="center", fontsize=10.5,
+                    fontweight="bold", color=INK, linespacing=0.95, zorder=6,
+                    bbox=dict(boxstyle="round,pad=0.15", fc="white", ec="none", alpha=0.8))
     ego_rect(0, 0, 0, fc=EGO_C, ec=EGO_C, alpha=0.35, lw=1.5)
     ax.annotate("", xy=P(d["length"] / 2 - 0.3, 0), xytext=P(-d["length"] / 4, 0),
                 arrowprops=dict(arrowstyle="-|>", color=INK, lw=1.6, mutation_scale=12))
@@ -109,7 +124,7 @@ def draw_panel(ax, d, row):
     ax.add_patch(Circle(P(now.x, now.y), r, fc=PED_C, ec="white", lw=1, zorder=5))
 
     ax.set_xlim(-7, 7)
-    ax.set_ylim(-9, 11)
+    ax.set_ylim(YMIN, 11)
     ax.set_aspect("equal")
     ax.set_xticks([])
     ax.set_yticks([])
@@ -143,7 +158,7 @@ def bev_grid(picks, batch_root, out_path, workers, cols=9):
     handles = [
         Patch(fc=EGO_C, ec=EGO_C, alpha=0.35, label="Ego at closest moment (arrow = heading)"),
         Line2D([], [], color=EGO_C, lw=2, marker="o", ms=3, label="Ego next 4 s (dot every 0.5 s)"),
-        Patch(fill=False, ec=EGO_C, ls=(0, (3, 2)), label="Ego 1 s earlier"),
+        Patch(fill=False, ec=EGO_C, ls=(0, (3, 2)), label="Ego 1 s earlier (number = its speed then)"),
         Line2D([], [], color=PED_C, marker="o", ms=8, lw=0, mec="white", label="Pedestrian at closest moment"),
         Line2D([], [], color=PED_C, lw=2, label="Pedestrian last 2 s"),
         Line2D([], [], color=PED_C, lw=1.5, ls=(0, (2, 2)), label="Pedestrian next 2 s"),
