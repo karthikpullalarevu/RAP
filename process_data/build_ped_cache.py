@@ -377,7 +377,10 @@ def process_scene(scene_name: str, dataset_root: Path, ego_cache_dir: Path,
         # --- Assemble feature dict ---
         features = {
             "camera_feature": camera_feature,
-            "camera_valid": torch.tensor(True),
+            # No real photo for simulated ped scenes: camera_feature is the raster itself.
+            # False sends the sample through the raster pass only in training (like the aug data);
+            # True would make the training step treat the raster as a real photo.
+            "camera_valid": torch.tensor(False),
             "rendered_camera_feature": camera_feature.clone(),
             "img_shape": img_shape,
             "lidar2img": lidar2img,
