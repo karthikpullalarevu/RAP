@@ -106,7 +106,7 @@ def draw_panel(ax, d, row):
                 ty = max(g.x, YMIN + 1.2)
             tx = -g.y if g.x >= YMIN + 1.2 else 0.0
             ax.text(tx, ty, f"{d['ghost_mph']:.0f}\nmph", ha="center", va="center", fontsize=10.5,
-                    fontweight="bold", color=INK, linespacing=0.95, zorder=6,
+                    color=INK, linespacing=0.95, zorder=6,
                     bbox=dict(boxstyle="round,pad=0.15", fc="white", ec="none", alpha=0.8))
     ego_rect(0, 0, 0, fc=EGO_C, ec=EGO_C, alpha=0.35, lw=1.5)
     ax.annotate("", xy=P(d["length"] / 2 - 0.3, 0), xytext=P(-d["length"] / 4, 0),
