@@ -1,0 +1,214 @@
+#!/usr/bin/env python3
+"""Bird's-eye-view grid of close passes: ego within 1 m of an inserted ped while moving.
+
+Each panel is drawn at the closest moment, in the ego frame (ego points up):
+  - ego as a rectangle with a heading arrow, its past 2 s and future 4 s path
+  - the pedestrian now, its past 2 s and future 2 s path
+  - faint "1 s earlier" ghosts of both, to show who was where when
+
+Also writes the full list of such scenes and the speed-vs-distance histogram in mph.
+
+Usage:
+    python process_data/plot_close_pass_bev.py \
+        --batch-root /datahdd2/karthik/ped_v2/raw \
+        --analysis-dir /datahdd2/karthik/ped_v2/analysis
+"""
+
+import argparse
+import json
+import math
+import os
+import sys
+from concurrent.futures import ProcessPoolExecutor
+from pathlib import Path
+
+import numpy as np
+import pandas as pd
+
+sys.path.insert(0, str(Path(__file__).parent.parent))
+os.environ.setdefault("NUPLAN_MAPS_ROOT", "/datahdd/karthik/dataset/nuplan-maps-v1.0")
+os.environ.setdefault("NUPLAN_MAP_VERSION", "nuplan-maps-v1.0")
+
+from process_data.build_ped_cache import load_simulation_log, _patch_map_path
+
+MPH = 2.23694
+HZ = 20
+PAST, FUT_EGO, FUT_PED, GHOST = 2 * HZ, 4 * HZ, 2 * HZ, 1 * HZ
+SPEED_BINS = [(1, 5), (5, 10), (10, 20), (20, 99)]      # mph
+EGO_C, PED_C, INK, MUTED = "#2a78d6", "#eb6834", "#222222", "#777777"
+
+
+def extract(args):
+    """Ego and nearest-ped tracks around the closest frame, in the ego frame at that frame."""
+    scene_dir, t0 = args
+    _patch_map_path()
+    inserted = set(json.loads((scene_dir / "metadata/result.json").read_text())
+                   ["saved_log_summary"]["pedestrian_track_tokens"])
+    data = load_simulation_log(next((scene_dir / "simulation_log").glob("*.msgpack.xz"))).simulation_history.data
+
+    ego0 = data[t0].ego_state
+    foot = ego0.car_footprint.geometry
+    peds0 = [o for o in data[t0].observation.tracked_objects.tracked_objects if o.track_token in inserted]
+    ped0 = min(peds0, key=lambda o: o.box.geometry.distance(foot))
+    cx, cy, h = ego0.center.x, ego0.center.y, ego0.center.heading
+    c, s = math.cos(-h), math.sin(-h)
+
+    def local(x, y):
+        dx, dy = x - cx, y - cy
+        return dx * c - dy * s, dx * s + dy * c
+
+    ego, ped = {}, {}
+    for f in range(max(0, t0 - PAST), min(len(data), t0 + FUT_EGO + 1)):
+        e = data[f].ego_state
+        ego[f - t0] = (*local(e.center.x, e.center.y), e.center.heading - h)
+        for o in data[f].observation.tracked_objects.tracked_objects:
+            if o.track_token == ped0.track_token:
+                ped[f - t0] = local(o.center.x, o.center.y)
+    box = ego0.car_footprint.oriented_box
+    return {"scene": scene_dir.name, "ego": ego, "ped": ped, "length": box.length, "width": box.width,
+            "ped_radius": max(ped0.box.length, ped0.box.width) / 2}
+
+
+def draw_panel(ax, d, row):
+    from matplotlib.patches import Circle, Polygon
+
+    def P(x, y):          # ego frame (x forward, y left) -> plot (left is left, forward is up)
+        return -np.asarray(y), np.asarray(x)
+
+    def ego_rect(x, y, hd, **kw):
+        L, W = d["length"] / 2, d["width"] / 2
+        pts = np.array([[L, W], [L, -W], [-L, -W], [-L, W]])
+        rot = np.array([[math.cos(hd), -math.sin(hd)], [math.sin(hd), math.cos(hd)]])
+        pts = pts @ rot.T + [x, y]
+        ax.add_patch(Polygon(np.column_stack(P(pts[:, 0], pts[:, 1])), closed=True, **kw))
+
+    ego = pd.DataFrame(d["ego"], index=["x", "y", "h"]).T.sort_index()
+    ped = pd.DataFrame(d["ped"], index=["x", "y"]).T.sort_index()
+
+    # ego: past (thin), future (solid, dot every 0.5 s)
+    ax.plot(*P(ego.x[ego.index <= 0], ego.y[ego.index <= 0]), color=EGO_C, lw=1, alpha=0.45)
+    fut = ego[ego.index >= 0]
+    ax.plot(*P(fut.x, fut.y), color=EGO_C, lw=2)
+    ax.plot(*P(fut.x[::10], fut.y[::10]), "o", color=EGO_C, ms=3)
+    if -GHOST in ego.index:
+        g = ego.loc[-GHOST]
+        ego_rect(g.x, g.y, g.h, fill=False, ec=EGO_C, lw=1, ls=(0, (3, 2)), alpha=0.7)
+    ego_rect(0, 0, 0, fc=EGO_C, ec=EGO_C, alpha=0.35, lw=1.5)
+    ax.annotate("", xy=P(d["length"] / 2 - 0.3, 0), xytext=P(-d["length"] / 4, 0),
+                arrowprops=dict(arrowstyle="-|>", color=INK, lw=1.6, mutation_scale=12))
+
+    # ped: past (solid), future (dashed), now (filled), 1 s earlier (hollow)
+    ax.plot(*P(ped.x[ped.index <= 0], ped.y[ped.index <= 0]), color=PED_C, lw=2)
+    pf = ped[(ped.index >= 0) & (ped.index <= FUT_PED)]
+    ax.plot(*P(pf.x, pf.y), color=PED_C, lw=1.5, ls=(0, (2, 2)))
+    r = max(d["ped_radius"], 0.3)
+    if -GHOST in ped.index:
+        g = ped.loc[-GHOST]
+        ax.add_patch(Circle(P(g.x, g.y), r, fill=False, ec=PED_C, lw=1.2))
+    now = ped.loc[0]
+    ax.add_patch(Circle(P(now.x, now.y), r, fc=PED_C, ec="white", lw=1, zorder=5))
+
+    ax.set_xlim(-7, 7)
+    ax.set_ylim(-9, 11)
+    ax.set_aspect("equal")
+    ax.set_xticks([])
+    ax.set_yticks([])
+    for sp in ax.spines.values():
+        sp.set_color("#cccccc")
+    ax.set_title(f"gap {row.gap_m:.2f} m · ego {row.mph:.0f} mph · ped {row.ped_mph:.0f} mph",
+                 fontsize=7.5, color=INK, pad=4)
+
+
+def bev_grid(picks, batch_root, out_path, workers):
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    from matplotlib.lines import Line2D
+    from matplotlib.patches import Patch
+
+    jobs = [(batch_root / r.scene_name, int(r.frame_idx)) for r in picks.itertuples()]
+    with ProcessPoolExecutor(workers) as ex:
+        tracks = list(ex.map(extract, jobs))
+
+    cols = 8
+    rows = math.ceil(len(picks) / cols)
+    fig, axes = plt.subplots(rows, cols, figsize=(2.3 * cols, 3.6 * rows))
+    for ax in np.ravel(axes):
+        ax.axis("off")
+    for ax, d, row in zip(np.ravel(axes), tracks, picks.itertuples()):
+        ax.axis("on")
+        draw_panel(ax, d, row)
+
+    handles = [
+        Patch(fc=EGO_C, ec=EGO_C, alpha=0.35, label="Ego at closest moment (arrow = heading)"),
+        Line2D([], [], color=EGO_C, lw=2, marker="o", ms=3, label="Ego next 4 s (dot every 0.5 s)"),
+        Patch(fill=False, ec=EGO_C, ls=(0, (3, 2)), label="Ego 1 s earlier"),
+        Line2D([], [], color=PED_C, marker="o", ms=8, lw=0, mec="white", label="Pedestrian at closest moment"),
+        Line2D([], [], color=PED_C, lw=2, label="Pedestrian last 2 s"),
+        Line2D([], [], color=PED_C, lw=1.5, ls=(0, (2, 2)), label="Pedestrian next 2 s"),
+        Line2D([], [], color=PED_C, marker="o", ms=8, lw=0, mfc="none", label="Pedestrian 1 s earlier"),
+    ]
+    fig.legend(handles=handles, loc="upper center", ncol=4, frameon=False, fontsize=11, bbox_to_anchor=(0.5, 0.985))
+    fig.suptitle("Close passes: ego within 1 m of a pedestrian while moving (48 random sequences, slow → fast)",
+                 fontsize=15, fontweight="bold", y=0.998)
+    fig.text(0.5, 0.012, "Each panel is 14 m wide × 20 m tall, ego frame, ego pointing up.",
+             ha="center", fontsize=10, color=MUTED)
+    fig.tight_layout(rect=(0, 0.02, 1, 0.955), h_pad=1.6)
+    fig.savefig(out_path, dpi=130)
+    plt.close(fig)
+    print(f"Saved {out_path}")
+
+
+def speed_distance_hist(frames, out_path):
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    from matplotlib.colors import LinearSegmentedColormap, LogNorm
+
+    blues = LinearSegmentedColormap.from_list("seq_blue", ["#cde2fb", "#86b6ef", "#2a78d6", "#1c5cab", "#0d366b"])
+    fig, ax = plt.subplots(figsize=(10, 6.5))
+    h = ax.hist2d(frames.gap_m, frames.ego_speed_ms * MPH,
+                  bins=[np.arange(0, 30.5, 0.5), np.arange(0, 42, 1)], cmap=blues, norm=LogNorm(), cmin=1)
+    fig.colorbar(h[3], ax=ax, label="Frames (log scale)")
+    ax.axvline(1, color=INK, lw=1, ls=(0, (4, 3)))
+    ax.text(1.2, 39.5, "1 m", fontsize=10, color=INK, va="top")
+    ax.set_xlabel("Gap between car body and nearest inserted pedestrian (m)")
+    ax.set_ylabel("Ego speed (mph)")
+    ax.set_title("Ego speed vs distance to pedestrian — all frames with an inserted pedestrian",
+                 fontweight="bold")
+    for sp in ("top", "right"):
+        ax.spines[sp].set_visible(False)
+    fig.savefig(out_path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    print(f"Saved {out_path}")
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--batch-root", type=Path, default=Path("/datahdd2/karthik/ped_v2/raw"))
+    ap.add_argument("--analysis-dir", type=Path, default=Path("/datahdd2/karthik/ped_v2/analysis"))
+    ap.add_argument("--per-bin", type=int, default=12)
+    ap.add_argument("--workers", type=int, default=16)
+    ap.add_argument("--seed", type=int, default=0)
+    args = ap.parse_args()
+
+    out = args.analysis_dir / "06_close_pass"
+    out.mkdir(exist_ok=True)
+    frames = pd.read_csv(args.analysis_dir / "02_ped_frames.csv",
+                         usecols=["scene_name", "frame_idx", "ego_speed_ms", "gap_m", "ped_speed_ms", "ped_side"])
+
+    closest = frames.loc[frames.groupby("scene_name").gap_m.idxmin()].copy()
+    closest["mph"] = closest.ego_speed_ms * MPH
+    closest["ped_mph"] = closest.ped_speed_ms * MPH
+    close = closest[(closest.gap_m < 1) & (closest.mph > 1)].sort_values("mph")
+    close.to_csv(out / "close_pass_scenes.csv", index=False)
+    print(f"{len(close)} sequences under 1 m while moving (>1 mph)")
+
+    picks = pd.concat(close[(close.mph > lo) & (close.mph <= hi)].sample(args.per_bin, random_state=args.seed)
+                      for lo, hi in SPEED_BINS).sort_values("mph")
+    bev_grid(picks, args.batch_root, out / "bev_close_passes.png", args.workers)
+    speed_distance_hist(frames, out / "speed_vs_distance_mph.png")
+
+
+if __name__ == "__main__":
+    main()
