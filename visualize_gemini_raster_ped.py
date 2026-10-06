@@ -32,7 +32,8 @@ PED_LWH = (0.9, 0.79, 1.79)                 # pedestrian box in the InterPlan si
 PED_Z0 = 0.07                               # box bottom in the lidar frame (measured on a training raster)
 FACE_RGB = {"front": (209, 31, 112), "back": (68, 182, 217), "left": (108, 8, 174),
             "right": (59, 86, 211), "top": (58, 10, 154)}
-PHOTO_H = 1080                              # saved rasters are 1120 rows: 1080 + 40 rows of padding
+RASTER_CROP = 20                            # rasters are 1920x1120; the data loader keeps rows 20..1099
+                                            # (navsim/common/dataclasses.py: rendered_image[20:-20])
 
 
 def front_lidar2img(token):
@@ -95,7 +96,7 @@ def draw_ped_cuboid(img_rgb, M, xy, heading=math.pi / 2, lwh=PED_LWH):
 
 def load_raster(token):
     r = cv2.cvtColor(cv2.imread(str(ABLATION_DIR / token / "raster" / "front.jpg")), cv2.COLOR_BGR2RGB)
-    return r[:PHOTO_H].copy()                                   # drop the padding rows
+    return r[RASTER_CROP:-RASTER_CROP].copy()                   # same centre crop the model input uses
 
 
 def main():
