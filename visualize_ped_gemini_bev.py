@@ -48,7 +48,8 @@ INK, MUTED = "#222222", "#777777"
 def predict(agent, agent_input, front_path=None):
     """Predicted poses (10, 3) = x forward, y left, heading; optionally with the front photo replaced."""
     if front_path is not None:
-        agent_input.cameras[-1].cam_f0.image = cv2.imread(front_path)
+        # RGB, like the data loader (PIL). cv2.imread alone gives BGR, i.e. red and blue swapped.
+        agent_input.cameras[-1].cam_f0.image = cv2.cvtColor(cv2.imread(front_path), cv2.COLOR_BGR2RGB)
     with torch.no_grad():
         feats = {}
         for b in agent.get_feature_builders():
