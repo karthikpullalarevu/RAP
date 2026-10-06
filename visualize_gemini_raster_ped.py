@@ -64,9 +64,18 @@ def ped_positions(dets, M):
 
 
 def draw_ped_cuboid(img_rgb, M, xy, heading=math.pi / 2, lwh=PED_LWH):
-    """Paint a pedestrian cuboid into an RGB raster (in place). heading: pi/2 = walking to the left."""
+    """Paint a pedestrian cuboid into an RGB raster (in place). heading: pi/2 = walking to the left.
+
+    xy = measured pedestrian distance in the lidar frame; the box's far side is placed there.
+    """
     L, W, H = lwh
     c, s = math.cos(heading), math.sin(heading)
+    # xy is the measured distance to the pedestrian: put the box's far side there, so the box
+    # extends from that distance back towards ego (not centred on it).
+    n = math.hypot(*xy)
+    ux, uy = xy[0] / n, xy[1] / n
+    half_depth = abs(ux * c + uy * s) * L / 2 + abs(-ux * s + uy * c) * W / 2
+    xy = (xy[0] - ux * half_depth, xy[1] - uy * half_depth)
     # corners: index = (front/back, left/right, bottom/top)
     pts = {}
     for fx in (1, -1):
