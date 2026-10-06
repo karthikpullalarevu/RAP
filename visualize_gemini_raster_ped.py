@@ -115,7 +115,7 @@ def main():
 
     ap = argparse.ArgumentParser()
     ap.add_argument("--output-dir", required=True)
-    ap.add_argument("--scenes", nargs="+", required=True, help="token_vN, e.g. 045f4ecec234564b_v0")
+    ap.add_argument("--scenes", nargs="+", required=True, help="token_vN, e.g. 045f4ecec234564b_v0, or: all")
     ap.add_argument("--all-peds", action="store_true", help="Draw every detected person, not only the nearest")
     ap.add_argument("--closer", type=float, default=0.0,
                     help="Move each pedestrian this many metres closer to ego than the measured distance")
@@ -124,9 +124,17 @@ def main():
     out.mkdir(parents=True, exist_ok=True)
     dets = {(e["token"], e["suffix"]): e["detections"] for e in json.load(open(LIDAR_RESULTS))}
 
-    for sc in args.scenes:
+    scenes = args.scenes
+    if scenes == ["all"]:                                       # every Gemini image that has a scene folder
+        scenes = sorted(f"{t}_v{sfx[-1]}" for (t, sfx) in dets
+                        if (ABLATION_DIR / t / "case.json").exists() and (GENERATED_DIR / f"{t}_{sfx}.jpg").exists())
+    for sc in scenes:
         token, v = sc.rsplit("_v", 1)
-        M = front_lidar2img(token)
+        try:
+            M = front_lidar2img(token)
+        except (StopIteration, FileNotFoundError):
+            print(f"skip {sc}: scene not found in the navtest logs")
+            continue
         peds = ped_positions(dets.get((token, f"front_{v}"), []), M)
         peds = peds if args.all_peds else peds[:1]
         measured = ", ".join(f"{math.hypot(*p):.1f} m" for p in peds)
