@@ -117,6 +117,8 @@ def main():
     ap.add_argument("--output-dir", required=True)
     ap.add_argument("--scenes", nargs="+", required=True, help="token_vN, e.g. 045f4ecec234564b_v0")
     ap.add_argument("--all-peds", action="store_true", help="Draw every detected person, not only the nearest")
+    ap.add_argument("--closer", type=float, default=0.0,
+                    help="Move each pedestrian this many metres closer to ego than the measured distance")
     args = ap.parse_args()
     out = Path(args.output_dir)
     out.mkdir(parents=True, exist_ok=True)
@@ -127,6 +129,8 @@ def main():
         M = front_lidar2img(token)
         peds = ped_positions(dets.get((token, f"front_{v}"), []), M)
         peds = peds if args.all_peds else peds[:1]
+        measured = ", ".join(f"{math.hypot(*p):.1f} m" for p in peds)
+        peds = [(p[0] * (1 - args.closer / math.hypot(*p)), p[1] * (1 - args.closer / math.hypot(*p))) for p in peds]
         orig = cv2.cvtColor(cv2.imread(str(ABLATION_DIR / token / "rgb" / "front.jpg")), cv2.COLOR_BGR2RGB)
         ped_photo = cv2.cvtColor(cv2.imread(str(GENERATED_DIR / f"{token}_front_{v}.jpg")), cv2.COLOR_BGR2RGB)
         raster = load_raster(token)
@@ -138,7 +142,8 @@ def main():
         where = ", ".join(f"{math.hypot(*p):.1f} m" for p in peds)
         panels = [(orig, "Original photo"), (raster, "Original raster"),
                   (ped_photo, "Photo with pedestrian (Gemini)"),
-                  (raster_ped, f"Raster with pedestrian box added ({where} away)")]
+                  (raster_ped, f"Raster with pedestrian box added (at {where}; measured {measured})"
+                               if args.closer else f"Raster with pedestrian box added ({where} away)")]
         for ax, (im, title) in zip(axes.ravel(), panels):
             ax.imshow(im)
             ax.set_title(title, fontsize=13)
