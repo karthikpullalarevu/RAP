@@ -45,9 +45,20 @@ def predict(agent, agent_input):
         return agent.forward(feats)["trajectory"].squeeze(0).float().cpu().numpy()
 
 
+EGO_MPH = None      # set by --ego-mph: overrides the speed the model is told ego has now
+
+
+def end_mph(traj):
+    """Speed over the last half second of the predicted path."""
+    return float(np.linalg.norm(traj[-1, :2] - traj[-2, :2]) / 0.5 * B.MPH)
+
+
 def make_input(loader, token, mode, front=None):
     """mode 'photo': real photos (front optionally replaced). mode 'raster': rasters in every camera slot."""
     a = loader.get_agent_input_from_token(token)
+    if EGO_MPH is not None:
+        a.ego_statuses[-1].ego_velocity[0] = EGO_MPH / B.MPH
+        a.ego_statuses[-1].ego_velocity[1] = 0.0
     cams = a.cameras[-1]
     if mode == "raster":
         for name in CAMS:
@@ -121,10 +132,13 @@ def main():
     ap.add_argument("--model", action="append", required=True, help='"Label=/path/to.ckpt"')
     ap.add_argument("--output-dir", required=True)
     ap.add_argument("--closer", type=float, default=1.5)
+    ap.add_argument("--ego-mph", type=float, default=None, help="Override ego's current speed input (mph)")
     ap.add_argument("--max-scenes", type=int, default=None)
     args = ap.parse_args()
     out = Path(args.output_dir)
     out.mkdir(parents=True, exist_ok=True)
+    global EGO_MPH
+    EGO_MPH = args.ego_mph
 
     models = [m.split("=", 1) for m in args.model]
     agents = [(name, V.load_agent(ckpt), B.COLORS[i]) for i, (name, ckpt) in enumerate(models)]
@@ -154,7 +168,8 @@ def main():
             continue
         M = B.lidar2img(cam)
         raster0 = np.asarray(cam.rendered_image).astype(np.uint8)
-        ego_mph = float(base_in.ego_statuses[-1].ego_velocity[0]) * B.MPH
+        recorded_mph = float(base_in.ego_statuses[-1].ego_velocity[0]) * B.MPH
+        ego_mph = recorded_mph if EGO_MPH is None else EGO_MPH
         no_ped = {(name, mode): predict(agent, make_input(loader, token, mode))
                   for name, agent, _ in agents for mode in ("photo", "raster")}
         for v in range(3):
@@ -178,12 +193,16 @@ def main():
                                      ped_x=ped_xy[0], ped_y=ped_xy[1], ped_dist=math.hypot(*ped_xy),
                                      dist_5s_no_ped=float(no_ped[(name, mode)][:, 0].max()),
                                      dist_5s_ped=float(traj[:, 0].max()), closest_gap=gap, hits=int(gap <= 0),
+                                     recorded_mph=recorded_mph, end_mph_no_ped=end_mph(no_ped[(name, mode)]),
+                                     end_mph_ped=end_mph(traj),
                                      traj=json.dumps(np.round(traj, 3).tolist())))
             draw([(photo, cam, ped, f"pedestrian\n{n:.1f} m away", res["photo"],
                    "Photo input (pedestrian added with Gemini)"),
                   (raster, cam, ped_raster, f"pedestrian box\n{math.hypot(*ped_raster):.1f} m away", res["raster"],
                    f"Raster input (pedestrian box drawn {args.closer:g} m closer than measured)")],
-                 f"{token} · variant {v} · ego at {ego_mph:.0f} mph", str(out / f"{token}_v{v}.jpg"))
+                 f"{token} · variant {v} · ego at {ego_mph:.0f} mph"
+                 + ("" if EGO_MPH is None else f" (speed input set; recorded {recorded_mph:.0f} mph)"),
+                 str(out / f"{token}_v{v}.jpg"))
         print(f"done {token}", flush=True)
 
     pd.DataFrame(rows).to_csv(out / "rgb_vs_raster_summary.csv", index=False)
