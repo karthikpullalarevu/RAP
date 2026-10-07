@@ -60,6 +60,7 @@ def main():
     ap.add_argument("--max-ped-mph", type=float, default=None, help="Only pedestrians moving slower than this")
     ap.add_argument("--min-ped-mph", type=float, default=None, help="Only pedestrians moving faster than this")
     ap.add_argument("--seed", type=int, default=0)
+    ap.add_argument("--simple", action="store_true", help="Slide version: two short labels per example, nothing else")
     args = ap.parse_args()
 
     p = pd.read_csv(A / "02_ped_frames.csv", usecols=["scene_name", "frame_idx", "gap_m", "ego_speed_ms", "has_raster",
@@ -116,6 +117,12 @@ def main():
             ax.spines[sp].set_visible(False)
         ax.set_ylabel("metres ahead", fontsize=9, color=MUTED)
         end_mph = ef.mph.iloc[-1]
+        if args.simple:
+            ax.set_ylabel("")
+            ax_img.set_title(f"ego {ego.loc[0].mph:.0f} mph · pedestrian {d['ped_mph']:.0f} mph",
+                             fontsize=17, fontweight="bold", color=INK)
+            ax.set_title(f"passes {gmin:.1f} m away", fontsize=17, fontweight="bold", color=PED_C)
+            continue
         ax_img.set_title(f"pedestrian {ped.loc[0].x:.1f} m ahead · ego {ego.loc[0].mph:.0f} mph · ped {d['ped_mph']:.0f} mph",
                          fontsize=13, fontweight="bold", color=INK)
         ax.set_title(f"next 5 s: closest gap {gmin:.1f} m at {tmin:.1f} s\nego ends at {end_mph:.0f} mph",
@@ -124,14 +131,16 @@ def main():
         axes[k // 2, (k % 2) * 2].axis("off"); axes[k // 2, (k % 2) * 2 + 1].axis("off")
     kind = ("slow pedestrian " if args.max_ped_mph is not None else "fast pedestrian " if args.min_ped_mph is not None
             else "Pedestrian ")
-    fig.suptitle(f"{kind.capitalize()}5–10 m ahead in ego's path while ego is fast: what the simulation does next",
-                 fontsize=15, fontweight="bold", y=0.995)
-    fig.text(0.5, 0.004, "Left: front raster at that moment. Right: top-down, ego (blue) and pedestrian (orange) over the next 5 s, "
-             "a dot every 0.5 s. Solid orange = pedestrian's last second, dashed = what it does next.",
-             ha="center", fontsize=10, color=MUTED)
-    fig.tight_layout(rect=(0, 0.015, 1, 0.98))
+    if not args.simple:
+      fig.suptitle(f"{kind.capitalize()}5–10 m ahead in ego's path while ego is fast: what the simulation does next",
+                   fontsize=15, fontweight="bold", y=0.995)
+      fig.text(0.5, 0.004, "Left: front raster at that moment. Right: top-down, ego (blue) and pedestrian (orange) over the next 5 s, "
+               "a dot every 0.5 s. Solid orange = pedestrian's last second, dashed = what it does next.",
+               ha="center", fontsize=10, color=MUTED)
+    fig.tight_layout(rect=(0, 0, 1, 1) if args.simple else (0, 0.015, 1, 0.98))
     tag = "" if args.max_ped_mph is None else f"_ped_under_{args.max_ped_mph:g}mph"
     tag += "" if args.min_ped_mph is None else f"_ped_over_{args.min_ped_mph:g}mph"
+    tag += "_simple" if args.simple else ""
     out = A / "06_close_pass" / f"ped_ahead_at_speed_{int(args.min_mph)}mph{tag}.png"
     fig.savefig(out, dpi=85)
     print("Saved", out)
