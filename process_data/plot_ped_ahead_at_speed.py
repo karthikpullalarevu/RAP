@@ -119,9 +119,17 @@ def main():
         end_mph = ef.mph.iloc[-1]
         if args.simple:
             ax.set_ylabel("")
-            ax_img.set_title(f"ego {ego.loc[0].mph:.0f} mph · pedestrian {d['ped_mph']:.0f} mph",
-                             fontsize=17, fontweight="bold", color=INK)
-            ax.set_title(f"passes {gmin:.1f} m away", fontsize=17, fontweight="bold", color=PED_C)
+            # where both are at the closest moment: car outline and pedestrian dot
+            fm = fut_gap.idxmin()
+            ex, ey, eh = ego.loc[fm].x, ego.loc[fm].y, ego.loc[fm].h
+            cc, ss = math.cos(eh), math.sin(eh)
+            cx_ = np.array([L, L, -L, -L]); cy_ = np.array([W, -W, -W, W])
+            ax.add_patch(Polygon(np.column_stack(P(ex + cx_ * cc - cy_ * ss, ey + cx_ * ss + cy_ * cc)),
+                                 fc="none", ec=EGO_C, lw=2.2, zorder=4))
+            ax.add_patch(Circle(P(ped.loc[fm].x, ped.loc[fm].y), 0.4, fc="white", ec=PED_C, lw=2.2, zorder=6))
+            ax_img.set_title(f"Now: pedestrian {ped.loc[0].x:.0f} m ahead, car at {ego.loc[0].mph:.0f} mph",
+                             fontsize=16, fontweight="bold", color=INK)
+            ax.set_title(f"{tmin:.1f} s later:\n{gmin:.1f} m apart", fontsize=16, fontweight="bold", color=PED_C)
             continue
         ax_img.set_title(f"pedestrian {ped.loc[0].x:.1f} m ahead · ego {ego.loc[0].mph:.0f} mph · ped {d['ped_mph']:.0f} mph",
                          fontsize=13, fontweight="bold", color=INK)
