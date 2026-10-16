@@ -11,15 +11,23 @@ training anchor t_a, starting at PDM-Closed's real state there (what the model's
   choice   = gentlest that works: lowest peak braking (2.0 .. 4.0 m/s2), then highest v_min,
              then latest braking start, then shortest wait.
 
+Fallback when that is impossible (pedestrian already close, or too fast for a 5 m stop):
+  close stop = brake now to a full stop, peak braking <= 5 m/s2; while moving the gap stays >= a buffer of
+             min(2.0, gap now - 0.5) m (at least 1.2 m); while stopped the pedestrian may pass at >= 0.5 m
+             (a stopped car can do nothing safer); pull away only once the pedestrian is GAP m clear, or
+             behind our front bumper and >= 3 m clear.
+
 Outcome per anchor:
-  unchanged  PDM-Closed's own drive already keeps the gap
-  edited     a profile with peak braking <= A_HARD keeps the gap -> new label
-  too_late   none does (or the pedestrian is already within GAP m) -> drop the sample
+  unchanged    PDM-Closed's own drive already keeps the gap (3 m once the pedestrian is behind our bumper)
+  edited       a profile with peak braking <= 4 m/s2 keeps the 5 m gap -> new label
+  edited_close only the close-stop fallback works -> new label
+  too_late     neither works -> drop the sample
   side_pass  the pedestrian never enters our lane in this scene, and the label comes within SIDE_GAP m -> drop
 
 Usage:
   python process_data/edit_yield_label.py --clips       # pictures for the 6 clips in 08_ped_beside_path_clips
   python process_data/edit_yield_label.py --scene <scene_name>
+  python process_data/edit_yield_label.py --batch --workers 48   # all training scenes within 3 m, counts + labels
 """
 import argparse
 import json
@@ -45,6 +53,9 @@ LANE_MARGIN = 0.3                            # our lane = car width + this each 
 GAP = 5.0                                    # m, required body-to-body gap
 SIDE_GAP = 3.0                               # m, side-pass samples closer than this are dropped
 A_LEVELS = [2.0, 2.5, 3.0, 3.5, 4.0]         # m/s2 peak braking tried in order; 2.0 = natural, 4.0 = hard limit
+A_CLOSE_LEVELS = [2.0, 2.5, 3.0, 3.5, 4.0, 4.5, 5.0]   # m/s2 for the close-stop fallback
+MOVE_BUF_MAX, MOVE_BUF_MIN, STOPPED_GAP, BEHIND_GAP = 2.0, 1.2, 0.5, 3.0
+STOPPED_V = 0.05                             # m/s, below this the car counts as stopped
 A_PULL_AWAY = 2.0                            # m/s2 peak acceleration when moving off
 SMOOTH_PEAK = 1.875                          # peak / average rate of a minimum-jerk speed change
 HORIZON = 8.0                                # s checked after the anchor (5 s label + 3 s so it doesn't end in a trap)
@@ -146,6 +157,22 @@ class Scene:
             if self.enters_lane:
                 break
 
+    def gap_and_behind(self, t0, s):
+        """Exact gap (min over pedestrians) and whether that pedestrian is behind our front bumper, at t0, t0+1, ..."""
+        tt = t0 + np.arange(len(s))
+        x, y, h = self.path.pose(s)
+        best, behind = np.full(len(s), np.inf), np.zeros(len(s), bool)
+        for tr in self.peds:
+            p = tr[tt]
+            ok = ~np.isnan(p[:, 0])
+            g = np.full(len(s), np.inf)
+            g[ok] = box_gap(x[ok], y[ok], h[ok], p[ok, 0], p[ok, 1], p[ok, 2])
+            lx = (p[:, 0] - x) * np.cos(h) + (p[:, 1] - y) * np.sin(h)
+            closer = g < best
+            best = np.where(closer, g, best)
+            behind = np.where(closer, ok & (lx < HALF_LEN), behind)
+        return best, behind
+
     def gaps(self, t0, s):
         """Gap at times t0, t0+1, ... for positions s (array)."""
         k = np.clip(np.round(s / DS).astype(int), 0, len(self.sgrid) - 1)
@@ -195,7 +222,8 @@ def solve_anchor(sc, ta):
         res.update(outcome="side_pass" if g_pdm[lab].min() < SIDE_GAP else "unchanged", s=s_pdm,
                    v=sc.v_pdm[ta:ta + n + 1])
         return res
-    if g_pdm.min() >= GAP:
+    g_ex, behind = sc.gap_and_behind(ta, s_pdm)
+    if (g_ex >= np.where(behind, BEHIND_GAP, GAP)).all():     # 5 m, or 3 m once the pedestrian is behind our bumper
         res.update(outcome="unchanged", s=s_pdm, v=sc.v_pdm[ta:ta + n + 1])
         return res
     v_tgt = max(v0, sc.v_pdm[ta:ta + n + 1].max())
@@ -215,6 +243,34 @@ def solve_anchor(sc, ta):
         s, v = profile(s0, v0, n, tau_d, a_p, v_min, hold, v_tgt)
         res.update(outcome="edited", s=s, v=v, a_peak=a_p if v0 - v_min > 0.05 else 0.0, v_min_mph=v_min * MPH,
                    brake_after_s=tau_d, wait_s=hold)
+        return res
+
+    # fallback: close stop
+    g0 = float(sc.gaps(ta, s_pdm[:1])[0])
+    buf = max(MOVE_BUF_MIN, min(MOVE_BUF_MAX, g0 - 0.5))
+
+    def ok_close(tau_d, a_p, hold):
+        s, v = profile(s0, v0, n, tau_d, a_p, 0.0, hold, v_tgt)
+        g, behind = sc.gap_and_behind(ta, s)
+        g, behind, v = g[1:], behind[1:], v[1:]
+        stopped = v < STOPPED_V
+        resumed = np.zeros(len(v), bool)
+        if np.isfinite(hold) and stopped.any():
+            first_stop = int(np.argmax(stopped))
+            resumed[first_stop:] = ~stopped[first_stop:]
+        need = np.where(stopped, STOPPED_GAP, buf)
+        need = np.where(resumed, np.where(behind, BEHIND_GAP, GAP), need)
+        return bool((g >= need).all())
+
+    for a_p in A_CLOSE_LEVELS:
+        if not ok_close(0.0, a_p, np.inf):
+            continue
+        tau_d = 0.0                                          # close in: start braking now, no creeping past
+        k = last_true(tgrid, lambda h: not ok_close(tau_d, a_p, h))
+        hold = tgrid[0] if k is None else (tgrid[np.searchsorted(tgrid, k) + 1] if k < tgrid[-1] else np.inf)
+        s, v = profile(s0, v0, n, tau_d, a_p, 0.0, hold, v_tgt)
+        res.update(outcome="edited_close", s=s, v=v, a_peak=a_p if v0 > 0.05 else 0.0, v_min_mph=0.0,
+                   brake_after_s=tau_d, wait_s=hold, buffer_m=buf)
         return res
     res.update(outcome="too_late", s=None, v=None)
     return res
@@ -242,7 +298,8 @@ def plot(sc, rows, out, title_extra=""):
     from matplotlib.patches import Circle
 
     PDM, EDIT, PEDC, INK, MUTED = "#9a9a9a", "#2a78d6", "#eb6834", "#222222", "#777777"
-    OUTC = {"unchanged": "#1baf7a", "edited": EDIT, "too_late": "#d62728", "side_pass": "#a05fd0"}
+    OUTC = {"unchanged": "#1baf7a", "edited": EDIT, "edited_close": "#173f8a", "too_late": "#d62728",
+            "side_pass": "#a05fd0"}
     t = np.arange(sc.n) / HZ
     fig = plt.figure(figsize=(21, 12))
     gs = fig.add_gridspec(4, 2, width_ratios=[1, 1.7], height_ratios=[1, 1, 1, 0.35])
@@ -266,7 +323,7 @@ def plot(sc, rows, out, title_extra=""):
     for r in rows:
         ta = r["anchor"]
         ax_map.plot(*L(sc.ego[ta, 0], sc.ego[ta, 1]), "o", ms=6, color=OUTC[r["outcome"]], mec="white", zorder=5)
-        if r["outcome"] == "edited":
+        if r["outcome"] in ("edited", "edited_close"):
             x, y, _ = sc.path.pose(r["s"][LABEL_STEPS * STEP])
             ax_map.plot(*L(x, y), "s", ms=5, color=EDIT, mec="white", zorder=6)
     ax_map.set_aspect("equal")
@@ -284,26 +341,28 @@ def plot(sc, rows, out, title_extra=""):
     ax_g.plot(t, g_full, color=PDM, lw=2.5)
     ax_a.plot(t, np.gradient(sc.v_pdm) * HZ, color=PDM, lw=1.2)
     for r in rows:
-        if r["outcome"] != "edited":
+        if r["outcome"] not in ("edited", "edited_close"):
             continue
         ta, m = r["anchor"], LABEL_STEPS * STEP + 1
         tt = t[ta] + np.arange(m) / HZ
-        ax_v.plot(tt, r["v"][:m] * MPH, color=EDIT, lw=1.3, alpha=0.8)
-        ax_g.plot(tt, sc.gaps(ta, r["s"][:m]), color=EDIT, lw=1.3, alpha=0.8)
-        ax_a.plot(tt, np.gradient(r["v"][:m]) * HZ, color=EDIT, lw=1.3, alpha=0.8)
+        col = OUTC[r["outcome"]]
+        ax_v.plot(tt, r["v"][:m] * MPH, color=col, lw=1.3, alpha=0.8)
+        ax_g.plot(tt, sc.gaps(ta, r["s"][:m]), color=col, lw=1.3, alpha=0.8)
+        ax_a.plot(tt, np.gradient(r["v"][:m]) * HZ, color=col, lw=1.3, alpha=0.8)
     ax_v.set_ylabel("speed (mph)", color=MUTED)
     ax_v.set_ylim(bottom=0)
-    ax_v.set_title("Speed: grey = PDM-Closed (current labels), blue = edited 5 s label from each sample", loc="left",
+    ax_v.set_title("Speed: grey = PDM-Closed (current labels), blue = edited 5 s label from each sample "
+                   "(dark = close-stop fallback)", loc="left",
                    fontsize=11.5)
     ax_g.axhline(GAP, color=INK, lw=0.9, ls="--")
     ax_g.set_ylim(0, 25)
     ax_g.set_ylabel("gap to pedestrian (m)", color=MUTED)
-    ed = [r for r in rows if r["outcome"] == "edited"]
+    ed = [r for r in rows if r["outcome"] in ("edited", "edited_close")]
     worst = min((sc.gaps(r["anchor"], r["s"][:LABEL_STEPS * STEP + 1]).min() for r in ed), default=np.nan)
     ax_g.set_title(f"Gap, car body to pedestrian (dashed = {GAP:g} m) · PDM-Closed closest {np.nanmin(g_full):.1f} m"
                    f" · edited labels closest {worst:.1f} m", loc="left", fontsize=11.5)
     ax_a.axhline(0, color=MUTED, lw=0.6)
-    ax_a.set_ylim(-5, 3)
+    ax_a.set_ylim(-6, 3)
     ax_a.set_ylabel("acceleration (m/s²)", color=MUTED)
     peak = max((r["a_peak"] for r in ed), default=0)
     ax_a.set_title(f"Acceleration (negative = braking) · edited peak braking {peak:.1f} m/s² ({peak * MPH:.1f} mph/s)",
@@ -317,15 +376,15 @@ def plot(sc, rows, out, title_extra=""):
     counts = pd.Series([r["outcome"] for r in rows]).value_counts().to_dict()
     ax_o.set_title("Training samples: " + " · ".join(f"{k} {counts.get(k, 0)}" for k in OUTC), loc="left",
                    fontsize=11.5)
-    ax_o.legend(handles=[Line2D([], [], color=c, lw=6, label=k) for k, c in OUTC.items()], ncol=4, frameon=False,
+    ax_o.legend(handles=[Line2D([], [], color=c, lw=6, label=k) for k, c in OUTC.items()], ncol=5, frameon=False,
                 loc="upper right", bbox_to_anchor=(1, 1.9), fontsize=10)
     for ax in (ax_v, ax_g, ax_a, ax_o):
         ax.set_xlim(0, t[-1])
         ax.grid(color="#eeeeee")
         for sp in ("top", "right"):
             ax.spines[sp].set_visible(False)
-    fig.suptitle(f"{sc.name}{title_extra}\nYield edit: keep every pedestrian ≥ {GAP:g} m from the car body · braking "
-                 f"{A_LEVELS[0]:g}–{A_LEVELS[-1]:g} m/s² · pedestrian {'enters' if sc.enters_lane else 'never enters'}"
+    fig.suptitle(f"{sc.name}{title_extra}\nYield edit: keep every pedestrian ≥ {GAP:g} m from the car body (braking ≤ {A_LEVELS[-1]:g} m/s²), "
+                 f"else stop short (≤ {A_CLOSE_LEVELS[-1]:g} m/s²) · pedestrian {'enters' if sc.enters_lane else 'never enters'}"
                  f" our lane", fontsize=13, fontweight="bold")
     fig.tight_layout()
     fig.savefig(out, dpi=75)
@@ -336,7 +395,7 @@ def run(scene, tag=""):
     sc = Scene(scene)
     rows = solve_scene(sc)
     for r in rows:
-        if r["outcome"] == "edited":
+        if r["outcome"] in ("edited", "edited_close"):
             p = label_poses(sc, r["anchor"], r["s"])
             r["label_end_m"] = float(np.hypot(*p[-1, :2]))
             r["label_gap_min"] = float(sc.gaps(r["anchor"], r["s"][:LABEL_STEPS * STEP + 1]).min())
@@ -350,8 +409,14 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--scene")
     ap.add_argument("--clips", action="store_true", help="the 6 clips in 08_ped_beside_path_clips/clips.csv")
+    ap.add_argument("--batch", action="store_true", help="all training scenes within 3 m (numbers only, no pictures)")
+    ap.add_argument("--workers", type=int, default=48)
+    ap.add_argument("--limit", type=int, default=None)
     args = ap.parse_args()
     OUT.mkdir(parents=True, exist_ok=True)
+    if args.batch:
+        batch(args.workers, args.limit)
+        return
     jobs = []
     if args.clips:
         c = pd.read_csv(PED / "analysis" / "08_ped_beside_path_clips" / "clips.csv")
@@ -364,8 +429,63 @@ def main():
         df.to_csv(OUT / f"{tag}yield_edit_{scene}.csv", index=False)
         print(f"\n== {tag}{scene}")
         cols = ["anchor", "v0_mph", "pdm_min_gap", "outcome", "a_peak", "v_min_mph", "brake_after_s", "wait_s",
-                "label_gap_min"]
+                "buffer_m", "label_gap_min"]
         print(df[[c for c in cols if c in df]].round(2).to_string(index=False))
+
+
+
+# ---------------------------------------------------------------- batch over training scenes
+
+def _batch_one(scene):
+    try:
+        sc = Scene(scene)
+        rows, labels = [], {}
+        for r in solve_scene(sc):
+            row = {k: v for k, v in r.items() if k not in ("s", "v")}
+            row["scene"] = scene
+            if r["outcome"] in ("edited", "edited_close"):
+                labels[f"{scene}_{r['anchor']:04d}"] = label_poses(sc, r["anchor"], r["s"])
+                row["label_gap_min"] = float(sc.gaps(r["anchor"], r["s"][:LABEL_STEPS * STEP + 1]).min())
+            rows.append(row)
+        return rows, labels, None
+    except Exception as ex:
+        return [], {}, f"{scene}: {ex!r}"
+
+
+def batch(workers, limit=None):
+    import pickle
+    from concurrent.futures import ProcessPoolExecutor
+    from tqdm import tqdm
+    names = os.listdir(PED / "cache" / "train")
+    in_cache = {n for n in names}
+    scenes_in_train = {n.rsplit("_", 1)[0] for n in names}
+    p = pd.read_csv(PED / "analysis" / "02_ped_frames.csv", usecols=["scene_name", "gap_m"])
+    close = set(p.groupby("scene_name").gap_m.min().loc[lambda g: g < SIDE_GAP].index)
+    scenes = sorted(scenes_in_train & close)[:limit]
+    print(f"{len(scenes)} training scenes come within {SIDE_GAP:g} m of the pedestrian", flush=True)
+    rows, labels, errs = [], {}, []
+    with ProcessPoolExecutor(workers) as ex:
+        for r, l, e in tqdm(ex.map(_batch_one, scenes, chunksize=2), total=len(scenes)):
+            rows += r
+            labels.update(l)
+            if e:
+                errs.append(e)
+    df = pd.DataFrame(rows)
+    df["sample"] = df.scene + "_" + df.anchor.map("{:04d}".format)
+    df["in_train_cache"] = df["sample"].isin(in_cache)
+    out = OUT / "batch"
+    out.mkdir(exist_ok=True)
+    df.to_csv(out / "yield_edit_all_anchors.csv", index=False)
+    with open(out / "yield_edit_labels.pkl", "wb") as f:
+        pickle.dump({k: v for k, v in labels.items() if k in in_cache}, f)
+    (out / "errors.txt").write_text("\n".join(errs))
+    d = df[df.in_train_cache]
+    print(f"\nTraining samples in these scenes: {len(d)} ({len(errs)} scenes failed, see errors.txt)")
+    print(d.outcome.value_counts().to_string())
+    d = d.assign(speed=pd.cut(d.v0_mph, [0, 5, 10, 15, 20, 99], right=False))
+    print("\nBy ego speed at the sample (mph):")
+    print(pd.crosstab(d.speed, d.outcome, margins=True).to_string())
+    print(f"\nSaved {out}")
 
 
 if __name__ == "__main__":
