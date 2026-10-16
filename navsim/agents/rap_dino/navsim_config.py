@@ -49,6 +49,7 @@ class RAPConfig:
     tf_dropout: float = 0
     num_bev_layers: int=2
     image_architecture: str = "resnet34"
+    use_resnet: bool = False
 
     # loss weights
     trajectory_weight: float = 1

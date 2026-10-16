@@ -20,6 +20,7 @@ waymo_raw_path: null
 cache_path: ${oc.env:NAVSIM_EXP_ROOT}/training_cache
 cache_path_perturbed: ${oc.env:NAVSIM_EXP_ROOT}/training_cache_perturbed
 cache_path_others: ${oc.env:NAVSIM_EXP_ROOT}/training_cache_others
+cache_path_ped: null
 use_cache_without_dataset: false # load the training samples from the cache. scene-filter will be ignored
 force_cache_computation: true
 seed: 0

@@ -193,6 +193,64 @@ python navsim/planning/script/run_train_metric_caching.py \
 | 6. Perturbed cache | `run_dataset_caching.py` | `./cache/rap_perturbed/` |
 | 7. Metric cache | `run_train_metric_caching.py` | `./cache/train_metric_cache/` |
 
+## Phase 3: Process NavTest Split (for evaluation)
+
+Outputs go to `/datahdd2/karthik/` to keep the main disk free.
+
+### Step 8 — NavTest Ego Metadata + Rendered Views
+
+Only step 1 is needed for evaluation (no perturbed/augmented data).
+
+```bash
+cd /datahdd/karthik/RAP/process_data
+
+export PYTHONPATH=/datahdd/karthik/RAP:${PYTHONPATH}
+export NUPLAN_MAPS_ROOT=/datahdd/karthik/dataset/nuplan-maps-v1.0
+export NUPLAN_DB_PATH=/datahdd/karthik/dataset/nuplan-v1.1/splits/test
+export NUPLAN_SENSOR_PATH=/datahdd2/karthik/dataset/nuplan-v1.1/sensor_blobs/test
+export OPENBLAS_NUM_THREADS=1
+
+python -u create_openscene_metadata.py \
+  --nuplan-root-path /datahdd/karthik/dataset/nuplan-v1.1 \
+  --nuplan-db-path /datahdd/karthik/dataset/nuplan-v1.1/splits/test \
+  --nuplan-sensor-path /datahdd2/karthik/dataset/nuplan-v1.1/sensor_blobs/test \
+  --nuplan-map-version nuplan-maps-v1.0 \
+  --nuplan-map-root /datahdd/karthik/dataset/nuplan-maps-v1.0 \
+  --out-dir /datahdd2/karthik/dataset/nuplan-v1.1/navsim_logs/test \
+  --split test --thread-num 32 --start-index 0 --end-index 1350
+```
+
+**Sensor blobs:** The test split sensor blobs are symlinked from the NAS:
+```bash
+ln -s /mnt/nas/jinhyun1/datasets/nuPlan/dataset/nuplan-v1.1/sensor_blobs \
+      /datahdd2/karthik/dataset/nuplan-v1.1/sensor_blobs/test
+```
+
+**Output:**
+- `.pkl` files: `/datahdd2/karthik/dataset/nuplan-v1.1/navsim_logs/test/`
+- Rendered images: `/datahdd2/karthik/dataset/nuplan-v1.1/rendered_sensor_blobs/test/`
+
+**Checkpoint:** `checkpoint_ego.txt` (shared — clear between splits)
+
+### Step 9 — Cache NavTest Metrics
+
+```bash
+cd /datahdd/karthik/RAP
+
+export OPENSCENE_DATA_ROOT=/datahdd2/karthik/dataset/nuplan-v1.1
+python navsim/planning/script/run_metric_caching.py \
+  train_test_split=navtest \
+  cache.cache_path=/datahdd/karthik/RAP/exp/metric_cache \
+  sensor_blobs_path=/datahdd2/karthik/dataset/nuplan-v1.1/sensor_blobs/test \
+  experiment_name=metric_cache_navtest \
+  worker=single_machine_thread_pool \
+  worker.max_workers=64
+```
+
+**Output:** `/datahdd/karthik/RAP/exp/metric_cache/`
+
+---
+
 ## Next Step: Start Ray & Train
 
 ### Step 8 — Start Ray

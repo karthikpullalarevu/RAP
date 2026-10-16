@@ -43,7 +43,7 @@ class RAPAgent(AbstractAgent):
             self.bce_logit_loss = nn.BCEWithLogitsLoss()
             self.b2d = config.b2d
 
-            self.ray=False
+            self.ray=True
 
             if self.ray and self._config.pdm_scorer:
                 from navsim.planning.utils.multithreading.worker_ray_no_torch import RayDistributedNoTorch
@@ -118,7 +118,14 @@ class RAPAgent(AbstractAgent):
                 state_dict: Dict[str, Any] = torch.load(self._checkpoint_path, map_location=torch.device("cpu"))[
                     "state_dict"]
                 self.device = torch.device("cpu")
-            self.load_state_dict({k.replace("agent._rap_model", "_rap_model"): v for k, v in state_dict.items()})
+            state_dict = {k.replace("agent._rap_model", "_rap_model"): v for k, v in state_dict.items()}
+            # Handle transformers version difference: older versions used img_backbone.layer.X, newer use img_backbone.model.layer.X
+            state_dict = {k.replace("img_backbone.layer.", "img_backbone.model.layer."): v for k, v in state_dict.items()}
+            missing, unexpected = self.load_state_dict(state_dict, strict=False)
+            if missing:
+                print(f"Missing keys when loading checkpoint: {missing}")
+            if unexpected:
+                print(f"Unexpected keys when loading checkpoint: {unexpected}")
             self.to(self.device)
 
     def get_sensor_config(self) :
@@ -480,6 +487,7 @@ class RAPAgent(AbstractAgent):
             final_score_loss = self.bce_logit_loss(pred["pred_logit"][..., -1], final_scores)
             sub_score_loss = pred_ce_loss = pred_l1_loss = pred_area_loss = 0
             best_score = best_scores.mean()
+            score = best_score
 
 
         trajectory_loss = 0

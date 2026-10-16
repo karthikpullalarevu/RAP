@@ -15,6 +15,7 @@ config:
   distill_feature: True
   pdm_scorer: True
   cache_data: False
+  use_resnet: False
   train_metric_cache_path: './train_metric_cache'
 
 checkpoint_path: ''

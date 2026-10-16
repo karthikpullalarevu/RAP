@@ -26,8 +26,19 @@ def get_scores(args):
 
 def get_sub_score( metric_cache,poses,test):
 
-    with lzma.open(metric_cache, "rb") as f:
-        metric_cache = pickle.load(f)
+    try:
+        with lzma.open(metric_cache, "rb") as f:
+            metric_cache = pickle.load(f)
+    except (EOFError, lzma.LZMAError, pickle.UnpicklingError) as e:
+        print(f"WARNING: corrupted metric cache: {metric_cache} ({e})")
+        n_proposals = len(poses)
+        n_poses = 40
+        n_col = 2
+        scores = np.zeros((n_proposals, 7))
+        corners = np.zeros((n_proposals, n_poses, n_col, 4, 2))
+        labels = np.zeros((n_proposals, n_poses, n_col), dtype=bool)
+        ego_areas = np.zeros((n_proposals, n_poses - 1, n_poses - 1), dtype=bool)
+        return scores, corners, labels, ego_areas
 
     initial_ego_state = metric_cache.ego_state
 

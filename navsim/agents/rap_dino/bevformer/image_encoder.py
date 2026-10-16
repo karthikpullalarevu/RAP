@@ -27,20 +27,25 @@ class ImgEncoder(nn.Module):
         self.grid_mask = GridMask( True, True, rotate=1, offset=False, ratio=0.5, mode=1, prob=0.7)
         self.use_grid_mask = True
 
-        self.img_backbone = AutoModel.from_pretrained("facebook/dinov3-vith16plus-pretrain-lvd1689m")
-       # self.transform = make_transform(512)
-                                   
-        # original_mean = torch.tensor([[123.675, 116.28, 103.53]]).view(1,3,1,1)
-        # original_std = torch.tensor([[58.395, 57.12, 57.375]]).view(1,3,1,1)
-        # self.register_buffer("original_img_mean", original_mean, persistent=False)
-        # self.register_buffer("original_img_std", original_std, persistent=False)
+        self.use_resnet = getattr(config, 'use_resnet', False)
+
+        if self.use_resnet:
+            self.img_backbone = timm.create_model("resnet34", pretrained=True, features_only=True)
+            resnet_channels = [64, 128, 256, 512]  # resnet34 feature channels
+        else:
+            self.img_backbone = AutoModel.from_pretrained("facebook/dinov3-vith16plus-pretrain-lvd1689m")
 
         self.with_img_neck=True
 
         self.num_outs=1
 
+        if self.use_resnet:
+            fpn_in_channels = resnet_channels[-self.num_outs:]
+        else:
+            fpn_in_channels = [64,128,256,1280][-self.num_outs:]
+
         self.img_neck=FPN(
-            in_channels=[64,128,256,1280][-self.num_outs:],
+            in_channels=fpn_in_channels,
             out_channels=_dim_,
             start_level=0,
             add_extra_convs='on_output',
@@ -85,8 +90,11 @@ class ImgEncoder(nn.Module):
             #img = self.transform(img)
             if self.training and self.use_grid_mask:
                 img = self.grid_mask(img)
-            img_feats = self.img_backbone(pixel_values=img)['last_hidden_state']
-            img_feats = self._tokens_to_map(img_feats,B,N,img.shape[2],img.shape[3])
+            if self.use_resnet:
+                img_feats = self.img_backbone(img)[-1]  # last feature map
+            else:
+                img_feats = self.img_backbone(pixel_values=img)['last_hidden_state']
+                img_feats = self._tokens_to_map(img_feats,B,N,img.shape[2],img.shape[3])
 
             if isinstance(img_feats, dict):
                 img_feats = list(img_feats.values())

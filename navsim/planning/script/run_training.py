@@ -1,6 +1,7 @@
 from typing import Tuple
 from pathlib import Path
 import logging
+import os
 
 import hydra
 from hydra.utils import instantiate
@@ -166,7 +167,18 @@ def main(cfg: DictConfig) -> None:
             print(f'len(others): {len(indices)}')
             train_data_others = Subset(train_data_others, indices)
 
-            train_data = ConcatDataset([train_data, train_data_perturbed, train_data_others])
+            datasets_to_concat = [train_data, train_data_perturbed, train_data_others]
+
+            if cfg.get('cache_path_ped', None) is not None:
+                train_data_ped = CacheOnlyDataset(
+                    cache_path=cfg.cache_path_ped,
+                    feature_builders=agent.get_feature_builders(),
+                    target_builders=agent.get_target_builders())
+                train_data_ped.score_mask = True
+                print(f'len(ped): {len(train_data_ped)}')
+                datasets_to_concat.append(train_data_ped)
+
+            train_data = ConcatDataset(datasets_to_concat)
 
     else:
         logger.info("Building SceneLoader")
@@ -179,7 +191,8 @@ def main(cfg: DictConfig) -> None:
     logger.info("Num validation samples: %d", len(val_data))
 
     logger.info("Building Trainer")
-    trainer = pl.Trainer(**cfg.trainer.params, callbacks=agent.get_training_callbacks(), logger=WandbLogger(project="rap", name=cfg.experiment_name, id=cfg.experiment_name),
+    trainer = pl.Trainer(**cfg.trainer.params, callbacks=agent.get_training_callbacks(), logger=WandbLogger(project="rap", name=os.environ.get("RAP_WANDB_ID", cfg.experiment_name),
+                               id=os.environ.get("RAP_WANDB_ID", cfg.experiment_name)),  # RAP_WANDB_ID: optional separate wandb run id
             )
 
     logger.info("Starting Training")

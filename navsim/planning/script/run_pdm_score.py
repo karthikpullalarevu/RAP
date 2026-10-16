@@ -141,19 +141,27 @@ def main(cfg: DictConfig) -> None:
     from math import ceil
     import torch
     # 1) 初始化 Ray worker（保持 debug_mode=False 才会真正并行&隔离 GPU）
-    pool = RayDistributed(threads_per_node=None, debug_mode=False)
+    import os
+    debug = os.environ.get("PDM_DEBUG_MODE", "0") == "1"
 
-    # 2) 按 GPU 数切成几份（也可以不切，直接丢很多任务，Ray 会排队）
-    n_gpus_total = torch.cuda.device_count()
-    step = max(1, ceil(len(data_points) / max(1, n_gpus_total)))
-    batches = [data_points[i:i+step] for i in range(0, len(data_points), step)]
+    if debug:
+        # Sequential mode: run everything in main process (no Ray workers)
+        logger.info("Running in sequential debug mode (PDM_DEBUG_MODE=1)")
+        score_rows = run_pdm_score(data_points)
+    else:
+        pool = RayDistributed(threads_per_node=None, debug_mode=False)
 
-    # 3) 每个任务占 1 张 GPU
-    task = Task(fn=run_pdm_score, num_cpus=16, num_gpus=1)
+        # 2) 按 GPU 数切成几份
+        n_gpus_total = torch.cuda.device_count()
+        step = max(1, ceil(len(data_points) / max(1, n_gpus_total)))
+        batches = [data_points[i:i+step] for i in range(0, len(data_points), step)]
 
-    # 4) 并行执行（每个任务里 run_pdm_score 收到的是一个 list 批次）
-    res_nested = pool.map(task, batches)     # List[List[pd.DataFrame]]
-    score_rows = [df for part in res_nested for df in part]
+        # 3) 每个任务占 1 张 GPU
+        task = Task(fn=run_pdm_score, num_cpus=16, num_gpus=1)
+
+        # 4) 并行执行
+        res_nested = pool.map(task, batches)
+        score_rows = [df for part in res_nested for df in part]
 
     pdm_score_df = pd.DataFrame(score_rows)
     num_sucessful_scenarios = pdm_score_df["valid"].sum()
