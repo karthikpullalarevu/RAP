@@ -1,3 +1,4 @@
+import os
 import torch
 
 from navsim.planning.simulation.planner.pdm_planner.simulation.pdm_simulator import PDMSimulator
@@ -27,46 +28,48 @@ def get_scores(args):
     return [get_sub_score(a["token"],a["poses"],a["test"],a.get("ped_rule")) for a in args]
 
 
-PED_LANE_MARGIN = 1.0      # m beyond the car's sides that still counts as "in our path"
-EGO_REAR_TO_FRONT = 1.461 + 2.588   # rear axle -> front bumper (m)
-EGO_HALF_WIDTH = 1.1485
+INSERTED_PEDS_FILE = "/datahdd2/karthik/ped_v2/analysis/10_e6/inserted_ped_tokens.json"
+_inserted_peds = None
+
+
+def inserted_peds(cache_path):
+    """Track tokens of the inserted (InterPlan) pedestrians for a ped_v2 metric cache path, else None.
+
+    ped_v2 samples are recognised by their token (<anchor token>_<frame>, anchor in the lookup); their metric
+    caches are listed under ./cache/train_metric_cache like navtrain ones, so the path alone doesn't tell."""
+    global _inserted_peds
+    if _inserted_peds is None:
+        import json
+        with open(INSERTED_PEDS_FILE) as f:
+            _inserted_peds = json.load(f)
+    sample_token = os.path.basename(os.path.dirname(str(cache_path)))
+    if "_" not in sample_token:
+        return None
+    peds = _inserted_peds.get(sample_token.rsplit("_", 1)[0])
+    return set(peds) if peds else None
 
 
 def ped_too_close_while_moving(simulated_states, cache_path, ped_rule):
-    """(n_proposals,) bool: while moving, the proposal gets within the buffer of a pedestrian that is
-    ahead of the front bumper and in or right beside our path (|lateral| < half width + PED_LANE_MARGIN).
-    Pedestrians standing beside the road or next to / behind the car do not count.
-
-    ped_rule = (buffer for ped_v2 samples, buffer for other samples, moving speed m/s).
-    Uses the scorer's ego polygons and the observation of the last score_proposals call."""
-    buf = ped_rule[0] if "ped_v2" in str(cache_path) else ped_rule[1]
-    obs = scorer._observation
-    peds = {t for t, o in obs.unique_objects.items() if o.tracked_object_type == TrackedObjectType.PEDESTRIAN}
+    """(n_proposals,) bool: while moving (speed > ped_rule[2]), the proposal's car box comes within
+    ped_rule[0] m of an inserted pedestrian. ped_v2 samples only (inserted pedestrians always cross our path);
+    other samples (navtrain) are left to the PDM scorer. Uses the observation of the last score_proposals call."""
+    peds = inserted_peds(cache_path)
     close = np.zeros(len(simulated_states), dtype=bool)
     if not peds:
         return close
-    x, y = simulated_states[..., StateIndex.X], simulated_states[..., StateIndex.Y]
-    h = simulated_states[..., StateIndex.HEADING]
+    buf, v_moving = ped_rule[0], ped_rule[2]
+    obs = scorer._observation
     speed = np.hypot(simulated_states[..., StateIndex.VELOCITY_X], simulated_states[..., StateIndex.VELOCITY_Y])
     for t in range(simulated_states.shape[1]):
-        moving = np.where((speed[:, t] > ped_rule[2]) & ~close)[0]
+        moving = np.where((speed[:, t] > v_moving) & ~close)[0]
         if len(moving) == 0:
             continue
         occ = obs[t]
-        toks = [tok for tok in occ.tokens if tok in peds]
-        if not toks:
+        geoms = [occ[tok] for tok in occ.tokens if tok in peds]
+        if not geoms:
             continue
-        geoms = np.array([occ[tok] for tok in toks], dtype=object)
-        cxy = np.array([[g.centroid.x, g.centroid.y] for g in geoms])                       # (P, 2)
-        dx = cxy[None, :, 0] - x[moving, t, None]
-        dy = cxy[None, :, 1] - y[moving, t, None]
-        c, s = np.cos(h[moving, t])[:, None], np.sin(h[moving, t])[:, None]
-        lon, lat = dx * c + dy * s, -dx * s + dy * c                                        # (M, P) in the car frame
-        in_path = (lon > EGO_REAR_TO_FRONT - 0.5) & (np.abs(lat) < EGO_HALF_WIDTH + PED_LANE_MARGIN)
-        if not in_path.any():
-            continue
-        d = shapely.distance(scorer._ego_polygons[moving, t][:, None], geoms[None])          # (M, P)
-        close[moving[((d < buf) & in_path).any(1)]] = True
+        d = shapely.distance(scorer._ego_polygons[moving, t][:, None], np.array(geoms, dtype=object)[None]).min(1)
+        close[moving[d < buf]] = True
     return close
 
 

@@ -81,7 +81,7 @@ def score_worker(args):
     ruled = CNS.get_sub_score(mc, poses, True, rule)[0]
     sc, obs = CNS.scorer, CNS.scorer._observation
     states = sc._states
-    peds = {t for t, o in obs.unique_objects.items() if o.tracked_object_type == TrackedObjectType.PEDESTRIAN}
+    peds = CNS.inserted_peds(mc) or set()          # the rule only counts inserted pedestrians (ped_v2)
     speed = np.hypot(states[..., StateIndex.VELOCITY_X], states[..., StateIndex.VELOCITY_Y])
     gap = np.full(len(poses), np.inf)
     tracks = {}
@@ -135,7 +135,7 @@ def main():
     ap.add_argument("--procs", type=int, default=16)
     ap.add_argument("--buffer", type=float, default=2.0, help="moving buffer (m) for the pedestrian rule")
     args = ap.parse_args()
-    rule = (args.buffer, args.buffer, 0.5)
+    rule = (args.buffer, 0.0, 0.5)
     out = Path(args.output_dir)
     out.mkdir(parents=True, exist_ok=True)
 
@@ -146,6 +146,7 @@ def main():
     agent = load_agent(args.ckpt, True, True)
     mc_paths = agent.train_metric_cache_paths
     samples = pick_samples(args.per_group, args.nav)
+    no_score = set(open("/datahdd2/karthik/ped_v2/analysis/10_e6/no_score_loss_tokens.txt").read().split())
 
     rows, jobs = [], []
     with torch.no_grad():
@@ -163,6 +164,7 @@ def main():
             label = target["trajectory"].float().numpy()
             T = props.shape[1]
             rows.append(dict(group=group, token=token, dir=str(d), props=props, logit=logit, label=label[:T],
+                             no_score=token in no_score,
                              v0_mph=float(np.linalg.norm(feat["ego_status"][-1, 3:5])) * MPH))
             jobs.append((mc_paths[token], np.concatenate([props, label[None, :T]]), rule))
     print(f"{len(rows)} samples, scoring {len(jobs)} x 65 trajectories", flush=True)
@@ -175,7 +177,7 @@ def main():
     stats = []
     for r in rows:
         p_nc, r_nc = r["plain"][:64, 0], r["ruled"][:64, 0]
-        stats.append(dict(group=r["group"], token=r["token"], v0_mph=round(r["v0_mph"], 1),
+        stats.append(dict(group=r["group"], token=r["token"], v0_mph=round(r["v0_mph"], 1), no_score=r["no_score"],
                           nc_fail_scorer=int((p_nc < .5).sum()), nc_fail_rule=int((r_nc < .5).sum()),
                           flipped_by_rule=int(((p_nc > .5) & (r_nc < .5)).sum()),
                           infonce_active=bool((r_nc > .5).any() and (r_nc < .5).any()),
@@ -191,8 +193,9 @@ def main():
     cfg.score_mode = "sub5"
     table = []
     torch.manual_seed(0)
-    for part, sel in (("ped_v2", [r for r in rows if r["group"] != "navtrain"]),
-                      ("navtrain", [r for r in rows if r["group"] == "navtrain"]), ("all", rows)):
+    scored = [r for r in rows if not r["no_score"]]       # what the score loss actually sees
+    for part, sel in (("ped_v2", [r for r in scored if r["group"] != "navtrain"]),
+                      ("navtrain", [r for r in scored if r["group"] == "navtrain"]), ("all", scored)):
         if not sel:
             continue
         tgt = torch.tensor(np.stack([r["ruled"][:64] for r in sel]), dtype=torch.float32)
@@ -209,15 +212,17 @@ def main():
     pd.set_option("display.width", 250)
     pd.set_option("display.max_columns", 20)
     print(tb.round(3).to_string(index=False))
-    print("\nPer group:")
+    print("\nPer group (samples that start within 2 m are left out of the score loss; stats below are for the rest):")
+    print(st.groupby("group").no_score.sum().rename("skipped (start < 2 m)").to_string())
+    st_all, st = st, st[~st.no_score]
     print(st.groupby("group").agg(samples=("token", "size"), v0_mph=("v0_mph", "median"),
                                   nc_fail_scorer=("nc_fail_scorer", "mean"), nc_fail_rule=("nc_fail_rule", "mean"),
                                   infonce_active=("infonce_active", "mean"),
                                   label_fails_rule=("label_nc_rule", lambda x: (x < .5).mean()),
                                   e4_pick_fails_rule=("picked_nc_rule", lambda x: (x < .5).mean())).round(2).to_string())
 
-    draw_overview(st, tb, rows, out / "e6_loss_overview.png")
-    draw_examples(rows, st, cfg, RAPAgent, out / "e6_loss_examples.png")
+    draw_overview(st, tb, scored, out / "e6_loss_overview.png")
+    draw_examples(scored, st.reset_index(drop=True), cfg, RAPAgent, out / "e6_loss_examples.png")
     print(f"Saved to {out}")
 
 
@@ -245,7 +250,7 @@ def draw_overview(st, tb, rows, path):
     g = st.groupby("group").agg(scorer=("nc_fail_scorer", "mean"), rule=("nc_fail_rule", "mean")).reindex(GROUPS)
     x = np.arange(len(g))
     ax[0, 0].bar(x - 0.2, g.scorer, 0.38, color=FAIL, label="PDM scorer (hits only)")
-    ax[0, 0].bar(x + 0.2, g.rule, 0.38, color=FLIP, label="with the moving rule (ped ahead in our path)")
+    ax[0, 0].bar(x + 0.2, g.rule, 0.38, color=FLIP, label="with the 1.5 m moving rule (inserted ped)")
     for i, (a, b) in enumerate(zip(g.scorer, g.rule)):
         ax[0, 0].text(i - 0.2, a + 0.5, f"{a:.1f}", ha="center", fontsize=10)
         ax[0, 0].text(i + 0.2, b + 0.5, f"{b:.1f}", ha="center", fontsize=10)
@@ -305,9 +310,9 @@ def draw_overview(st, tb, rows, path):
         gaps_hit += list(g_[p_ < .5])
     bins = np.arange(0, 15.5, 0.5)
     ax[1, 1].hist([gaps_hit, gaps_flip, gaps_ok], bins=bins, stacked=True, color=[FAIL, FLIP, SAFE],
-                  label=["NC 0: scorer collision", "NC 0: new, rule (ped ahead in path)", "NC 1"])
-    ax[1, 1].set_xlabel("closest gap to any pedestrian while moving (m, 15 = none / far); the rule only counts "
-                        "peds ahead in our path", color=MUTED)
+                  label=["NC 0: scorer collision", "NC 0: new, within 1.5 m while moving", "NC 1"])
+    ax[1, 1].axvline(1.5, color=INK, ls="--", lw=1)
+    ax[1, 1].set_xlabel("closest gap to the inserted pedestrian while moving (m, 15 = none / far)", color=MUTED)
     ax[1, 1].set_ylabel("proposals (ped_v2 samples)", color=MUTED)
     ax[1, 1].set_title("D. Closest moving gap of each proposal, coloured by its NC target", loc="left")
     ax[1, 1].legend(frameon=False)

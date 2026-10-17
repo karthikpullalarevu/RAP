@@ -493,6 +493,13 @@ class RAPAgent(AbstractAgent):
         proposal_list = pred["proposal_list"]
         target_trajectory = targets["trajectory"]
         score_mask = targets['score_mask']
+        imitation_mask = score_mask                       # full imitation weight; 0.1 for the rest
+        if getattr(config, "no_score_tokens_path", ""):   # E6: these samples skip the score loss only
+            if not hasattr(self, "_no_score_tokens"):
+                with open(config.no_score_tokens_path) as f:
+                    self._no_score_tokens = set(f.read().split())
+            skip = torch.tensor([t in self._no_score_tokens for t in targets["token"]], device=score_mask.device)
+            score_mask = score_mask & ~skip
 
         if self._config.pdm_scorer:
             if score_mask.sum()>0:
@@ -542,7 +549,7 @@ class RAPAgent(AbstractAgent):
                 1)
             # weight min_loss by score mask
             weight = torch.ones_like(min_loss, dtype=torch.float32,device=min_loss.device)
-            weight[~score_mask] = 0.1
+            weight[~imitation_mask] = 0.1
             min_loss = (min_loss * weight).mean()
             
             inter_loss = self.diversity_loss(proposals_i)

@@ -64,15 +64,18 @@ class RAPConfig:
     # score head mode (E6). "final": train/pick the final PDMS output (original RAP).
     # "sub5": train the 5 sub-scores [NC, DAC, EP, TTC, C] (outputs 0-4 of score_num=6; output 5 unused)
     score_mode: str = "final"
-    sub5_weights: tuple = (3.0, 1.0, 1.0, 2.0, 0.5)      # BCE weight per sub-score [NC, DAC, EP, TTC, C]
+    sub5_weights: tuple = (3.0 / 7.5, 1.0 / 7.5, 1.0 / 7.5, 2.0 / 7.5, 0.5 / 7.5)   # BCE weight per sub-score, sum 1
     nc_focal_gamma: float = 0.0                          # >0: focal BCE on NC (rare collisions); 0 = plain BCE
-    infonce_weight: float = 1.0                          # multi-positive InfoNCE on the NC logit across proposals
+    infonce_weight: float = 0.15                         # multi-positive InfoNCE on the NC logit across proposals
     infonce_tau: float = 0.2
-    # NC target override: NC = 0 if, while moving, a proposal gets within this many metres of a pedestrian
-    # that is ahead of the bumper and in or within 1 m of our path (compute_navsim_score.ped_too_close_while_moving)
-    ped_buffer_pedv2_m: float = 1.5                      # ped_v2 (InterPlan) samples (yield edit keeps 1.2-2 m)
-    ped_buffer_other_m: float = 1.5                      # navtrain samples
+    # NC target override (ped_v2 samples only): NC = 0 if, while moving, the proposal comes within
+    # ped_buffer_pedv2_m of the inserted pedestrian (compute_navsim_score.ped_too_close_while_moving)
+    ped_buffer_pedv2_m: float = 1.5
+    ped_buffer_other_m: float = 0.0                      # unused (navtrain keeps the PDM scorer's NC)
     ped_moving_speed: float = 0.5                        # m/s; a stopped car is not penalised
+    # samples listed here (tokens) skip the score loss but still train imitation: ped_v2 samples that start
+    # within 2 m of the pedestrian, where no proposal can satisfy the 1.5 m rule (process_data/build_e6_lists.py)
+    no_score_tokens_path: str = ""
     # how the final trajectory is picked from the 64 proposals:
     # "final" = argmax of the final PDMS output; "gated_pdms" / "log_barrier" = combine the 5 sub-scores
     pick_mode: str = "final"
