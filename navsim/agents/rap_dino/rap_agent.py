@@ -360,11 +360,15 @@ class RAPAgent(AbstractAgent):
                 }
                 data_points.append(data_dict)
         else:
+            cfg = self._config
+            ped_rule = ((cfg.ped_buffer_pedv2_m, cfg.ped_buffer_other_m, cfg.ped_moving_speed)
+                        if getattr(cfg, "score_mode", "final") == "sub5" and not test else None)
             data_points = [
                 {
                     "token": metric_cache_paths[token],
                     "poses": poses,
-                    "test": test
+                    "test": test,
+                    "ped_rule": ped_rule,
                 }
                 for token, poses in zip(targets["token"], proposals.cpu().numpy())
             ]
@@ -423,6 +427,14 @@ class RAPAgent(AbstractAgent):
         else:
             pred_area_loss = 0
 
+        if getattr(self._config, "score_mode", "final") == "sub5":
+            sub_score_loss, infonce_loss = self.sub5_loss(pred_logit, target_scores)
+            if pred_logit2 is not None:
+                a2, b2 = self.sub5_loss(pred_logit2, target_scores)
+                sub_score_loss, infonce_loss = (sub_score_loss + a2) / 2, (infonce_loss + b2) / 2
+            self._last_infonce_loss = infonce_loss
+            return sub_score_loss, 0, pred_ce_loss, pred_l1_loss, pred_area_loss
+
         sub_score_loss = self.bce_logit_loss(pred_logit, target_scores[..., -pred_logit.shape[-1]:])  # .mean()[..., -6:]
 
         final_score_loss = self.bce_logit_loss(pred_logit[..., -1], target_scores[..., -1])  # .mean()
@@ -437,6 +449,32 @@ class RAPAgent(AbstractAgent):
             final_score_loss=(final_score_loss+final_score_loss2)/2
 
         return sub_score_loss, final_score_loss, pred_ce_loss, pred_l1_loss, pred_area_loss
+
+    def sub5_loss(self, pred_logit, target_scores):
+        """E6 score loss. Loss A: weighted BCE on the 5 sub-scores [NC, DAC, EP, TTC, C] (focal on NC if
+        nc_focal_gamma > 0). Loss B: multi-positive InfoNCE on the NC logit across the proposals of a scene:
+        each safe proposal (NC target 1) against all unsafe ones (NC 0), safe ones not competing."""
+        cfg = self._config
+        logits, tgt = pred_logit[..., :5], target_scores[..., :5]
+        bce = F.binary_cross_entropy_with_logits(logits, tgt, reduction="none")          # (B, N, 5)
+        if cfg.nc_focal_gamma > 0:
+            p = torch.sigmoid(logits[..., 0])
+            p_t = p * tgt[..., 0] + (1 - p) * (1 - tgt[..., 0])
+            bce[..., 0] = bce[..., 0] * (1 - p_t) ** cfg.nc_focal_gamma
+        w = torch.tensor(cfg.sub5_weights, dtype=bce.dtype, device=bce.device)
+        loss_a = (bce.mean(dim=(0, 1)) * w).sum()
+
+        z = logits[..., 0].float() / cfg.infonce_tau                                       # (B, N) in fp32 (16-mixed training)
+        pos, neg = tgt[..., 0] > 0.5, tgt[..., 0] <= 0.5
+        valid = pos.any(1) & neg.any(1)
+        if valid.any():
+            z, pos, neg = z[valid], pos[valid], neg[valid]
+            neg_lse = torch.logsumexp(z.masked_fill(~neg, float("-inf")), dim=1, keepdim=True)   # (b, 1)
+            per = torch.logaddexp(z, neg_lse) - z                                         # -log softmax vs negatives
+            loss_b = (torch.where(pos, per, 0.0).sum(1) / pos.sum(1)).mean().to(bce.dtype)
+        else:
+            loss_b = logits.sum() * 0.0
+        return loss_a, loss_b
 
     def diversity_loss(self, proposals):
         dist = torch.linalg.norm(proposals[:, :, None] - proposals[:, None], dim=-1, ord=1).mean(-1)
@@ -490,6 +528,9 @@ class RAPAgent(AbstractAgent):
             score = best_score
 
 
+        infonce_loss = getattr(self, "_last_infonce_loss", None) if getattr(config, "score_mode", "final") == "sub5" else None
+        self._last_infonce_loss = None
+
         trajectory_loss = 0
 
         min_loss_list = []
@@ -532,6 +573,7 @@ class RAPAgent(AbstractAgent):
                 config.trajectory_weight * trajectory_loss
                 + config.sub_score_weight * sub_score_loss
                 + config.final_score_weight * final_score_loss
+                + (config.infonce_weight * infonce_loss if infonce_loss is not None else 0)
                 + config.pred_ce_weight * pred_ce_loss
                 + config.pred_l1_weight * pred_l1_loss
                 + config.pred_area_weight * pred_area_loss
@@ -548,6 +590,7 @@ class RAPAgent(AbstractAgent):
             "trajectory_loss": trajectory_loss,
             'sub_score_loss': sub_score_loss,
             'final_score_loss': final_score_loss,
+            'infonce_loss': infonce_loss if infonce_loss is not None else 0,
             'pred_ce_loss': pred_ce_loss,
             'pred_l1_loss': pred_l1_loss,
             'pred_area_loss': pred_area_loss,

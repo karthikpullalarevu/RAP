@@ -80,6 +80,19 @@ class DomainClassifier(nn.Module):
         logits = self.classifier(feat_rev).squeeze(-1)  # (B,)
         return logits
 
+def pick_score(probs, mode):
+    """Score used to pick one of the proposals. probs: (B, N, score_num) sigmoid outputs."""
+    if mode == "final":
+        return probs[:, :, -1]
+    p = probs[:, :, :5].clamp(min=1e-4)
+    nc, dac, ep, ttc, c = p.unbind(-1)
+    if mode == "gated_pdms":       # safety-gated PDMS: NC squared, gated by TTC, progress kept linear
+        return nc ** 2 * dac * ttc * (2.0 * ep + 5.0 * ttc + 1.0 * c) / 8.0
+    if mode == "log_barrier":      # log barrier on NC/DAC/TTC; progress and comfort linear so a stop isn't -inf
+        return 5.0 * nc.log() + 5.0 * dac.log() + 3.0 * ttc.log() + 0.5 * ep + 0.2 * c
+    raise ValueError(f"unknown pick_mode {mode}")
+
+
 class RAPModel(nn.Module):
     def __init__(self, config):
         super().__init__()
@@ -155,9 +168,10 @@ class RAPModel(nn.Module):
         output["domain_logits"] = domain_logits
 
         if pred_logit2 is not None:
-            pdm_score=(torch.sigmoid(pred_logit)+torch.sigmoid(pred_logit2))[:,:,-1]/2
+            probs=(torch.sigmoid(pred_logit)+torch.sigmoid(pred_logit2))/2
         else:
-            pdm_score=torch.sigmoid(pred_logit)[:,:,-1]
+            probs=torch.sigmoid(pred_logit)
+        pdm_score=pick_score(probs, getattr(self._config, "pick_mode", "final"))
 
         if return_score:
             output["trajectory"] = proposals

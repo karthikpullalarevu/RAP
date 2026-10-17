@@ -30,11 +30,12 @@ DEST = {"edited": "train_replaced_by_yield_edit", "edited_close": "train_replace
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--dry-run", action="store_true")
+    ap.add_argument("--tag", default="", help="_keyframes for the key-frame run")
     args = ap.parse_args()
 
-    d = pd.read_csv(BATCH / "yield_edit_all_anchors.csv")
+    d = pd.read_csv(BATCH / f"yield_edit_all_anchors{args.tag}.csv")
     d = d[d.in_train_cache & d.outcome.isin(DEST)]
-    labels = pickle.load(open(BATCH / "yield_edit_labels.pkl", "rb"))
+    labels = pickle.load(open(BATCH / f"yield_edit_labels{args.tag}.pkl", "rb"))
     edited = d.outcome.str.startswith("edited")
     missing = set(d[edited]["sample"]) - set(labels)
     assert not missing, f"{len(missing)} edited samples have no label"
@@ -61,7 +62,7 @@ def main():
             with gzip.open(new / "rap_target.gz", "wb", compresslevel=1) as f:
                 pickle.dump(target, f, protocol=pickle.HIGHEST_PROTOCOL)
         done.append((x.sample, x.outcome))
-    pd.DataFrame(done, columns=["sample", "outcome"]).to_csv(BATCH / "yield_edit_applied.csv", index=False)
+    pd.DataFrame(done, columns=["sample", "outcome"]).to_csv(BATCH / f"yield_edit_applied{args.tag}.csv", index=False)
     print(f"applied {len(done)}; train/ now has {len(os.listdir(CACHE / 'train'))} samples")
 
 

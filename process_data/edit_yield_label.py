@@ -283,9 +283,11 @@ def label_poses(sc, ta, s):
     return global_to_local(np.column_stack([x, y]), h, *sc.ego[ta, :3])
 
 
-def solve_scene(sc):
-    anchors = range(MIN_ANCHOR, min(MAX_ANCHOR, sc.n - 1 - LABEL_STEPS * STEP) + 1, 10)
-    return [solve_anchor(sc, ta) for ta in anchors]
+def solve_scene(sc, anchors=None):
+    """Solve every 2 Hz grid anchor, or the given anchor frames (e.g. the key frames training also uses)."""
+    if anchors is None:
+        anchors = range(MIN_ANCHOR, min(MAX_ANCHOR, sc.n - 1 - LABEL_STEPS * STEP) + 1, 10)
+    return [solve_anchor(sc, ta) for ta in anchors if ta <= sc.n - 1 - LABEL_STEPS * STEP]
 
 
 # ---------------------------------------------------------------- picture
@@ -412,10 +414,11 @@ def main():
     ap.add_argument("--batch", action="store_true", help="all training scenes within 3 m (numbers only, no pictures)")
     ap.add_argument("--workers", type=int, default=48)
     ap.add_argument("--limit", type=int, default=None)
+    ap.add_argument("--keyframes", action="store_true", help="with --batch: only the non-grid training frames")
     args = ap.parse_args()
     OUT.mkdir(parents=True, exist_ok=True)
     if args.batch:
-        batch(args.workers, args.limit)
+        batch(args.workers, args.limit, args.keyframes)
         return
     jobs = []
     if args.clips:
@@ -436,11 +439,12 @@ def main():
 
 # ---------------------------------------------------------------- batch over training scenes
 
-def _batch_one(scene):
+def _batch_one(job):
+    scene, anchors = job if isinstance(job, tuple) else (job, None)
     try:
         sc = Scene(scene)
         rows, labels = [], {}
-        for r in solve_scene(sc):
+        for r in solve_scene(sc, anchors):
             row = {k: v for k, v in r.items() if k not in ("s", "v")}
             row["scene"] = scene
             if r["outcome"] in ("edited", "edited_close"):
@@ -452,7 +456,7 @@ def _batch_one(scene):
         return [], {}, f"{scene}: {ex!r}"
 
 
-def batch(workers, limit=None):
+def batch(workers, limit=None, keyframes=False):
     import pickle
     from concurrent.futures import ProcessPoolExecutor
     from tqdm import tqdm
@@ -462,7 +466,21 @@ def batch(workers, limit=None):
     p = pd.read_csv(PED / "analysis" / "02_ped_frames.csv", usecols=["scene_name", "gap_m"])
     close = set(p.groupby("scene_name").gap_m.min().loc[lambda g: g < SIDE_GAP].index)
     scenes = sorted(scenes_in_train & close)[:limit]
-    print(f"{len(scenes)} training scenes come within {SIDE_GAP:g} m of the pedestrian", flush=True)
+    tag = ""
+    if keyframes:
+        # training samples in these scenes that are not on the 2 Hz grid (key frames: closest gap, hardest
+        # braking, ped first visible, ego first stopped); the grid run did not cover them
+        done = set(pd.read_csv(OUT / "batch" / "yield_edit_all_anchors.csv")["sample"])
+        todo = {}
+        for n in names:
+            sc_, fr = n.rsplit("_", 1)
+            if sc_ in set(scenes) and n not in done:
+                todo.setdefault(sc_, []).append(int(fr))
+        scenes = [(s, sorted(a)) for s, a in sorted(todo.items())]
+        tag = "_keyframes"
+        print(f"{sum(len(a) for _, a in scenes)} key-frame samples in {len(scenes)} scenes", flush=True)
+    else:
+        print(f"{len(scenes)} training scenes come within {SIDE_GAP:g} m of the pedestrian", flush=True)
     rows, labels, errs = [], {}, []
     with ProcessPoolExecutor(workers) as ex:
         for r, l, e in tqdm(ex.map(_batch_one, scenes, chunksize=2), total=len(scenes)):
@@ -475,10 +493,10 @@ def batch(workers, limit=None):
     df["in_train_cache"] = df["sample"].isin(in_cache)
     out = OUT / "batch"
     out.mkdir(exist_ok=True)
-    df.to_csv(out / "yield_edit_all_anchors.csv", index=False)
-    with open(out / "yield_edit_labels.pkl", "wb") as f:
+    df.to_csv(out / f"yield_edit_all_anchors{tag}.csv", index=False)
+    with open(out / f"yield_edit_labels{tag}.pkl", "wb") as f:
         pickle.dump({k: v for k, v in labels.items() if k in in_cache}, f)
-    (out / "errors.txt").write_text("\n".join(errs))
+    (out / f"errors{tag}.txt").write_text("\n".join(errs))
     d = df[df.in_train_cache]
     print(f"\nTraining samples in these scenes: {len(d)} ({len(errs)} scenes failed, see errors.txt)")
     print(d.outcome.value_counts().to_string())

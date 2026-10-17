@@ -54,12 +54,28 @@ class RAPConfig:
     # loss weights
     trajectory_weight: float = 1
     inter_weight: float =  0
-    sub_score_weight: int = 0
-    final_score_weight: int = 1
+    sub_score_weight: float = 0
+    final_score_weight: float = 1
     pred_ce_weight: int = 1
     pred_l1_weight: int = 0.1
     pred_area_weight: int = 2
     prev_weight: int = 0.1
+
+    # score head mode (E6). "final": train/pick the final PDMS output (original RAP).
+    # "sub5": train the 5 sub-scores [NC, DAC, EP, TTC, C] (outputs 0-4 of score_num=6; output 5 unused)
+    score_mode: str = "final"
+    sub5_weights: tuple = (3.0, 1.0, 1.0, 2.0, 0.5)      # BCE weight per sub-score [NC, DAC, EP, TTC, C]
+    nc_focal_gamma: float = 0.0                          # >0: focal BCE on NC (rare collisions); 0 = plain BCE
+    infonce_weight: float = 1.0                          # multi-positive InfoNCE on the NC logit across proposals
+    infonce_tau: float = 0.2
+    # NC target override: NC = 0 if, while moving, a proposal gets within this many metres of a pedestrian
+    # that is ahead of the bumper and in or within 1 m of our path (compute_navsim_score.ped_too_close_while_moving)
+    ped_buffer_pedv2_m: float = 1.5                      # ped_v2 (InterPlan) samples (yield edit keeps 1.2-2 m)
+    ped_buffer_other_m: float = 1.5                      # navtrain samples
+    ped_moving_speed: float = 0.5                        # m/s; a stopped car is not penalised
+    # how the final trajectory is picked from the 64 proposals:
+    # "final" = argmax of the final PDMS output; "gated_pdms" / "log_barrier" = combine the 5 sub-scores
+    pick_mode: str = "final"
     agent_class_weight: float = 1.0
     agent_box_weight: float = 0.1
     bev_semantic_weight: float = 1.0

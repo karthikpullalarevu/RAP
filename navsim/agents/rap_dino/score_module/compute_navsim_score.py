@@ -11,6 +11,9 @@ from navsim.planning.simulation.planner.pdm_planner.utils.pdm_enums import (
     WeightedMetricIndex,
 )
 import numpy as np
+import shapely
+from nuplan.common.actor_state.tracked_objects_types import TrackedObjectType
+from navsim.planning.simulation.planner.pdm_planner.utils.pdm_enums import StateIndex, EgoAreaIndex
 from .train_pdm_scorer import PDMScorerConfig, PDMScorer
 
 # metric_cache_loader = MetricCacheLoader(Path(os.getenv("NAVSIM_EXP_ROOT") + "/metric_cache"))
@@ -21,11 +24,55 @@ scorer = PDMScorer(proposal_sampling, config)
 
 def get_scores(args):
 
-    return [get_sub_score(a["token"],a["poses"],a["test"]) for a in args]
+    return [get_sub_score(a["token"],a["poses"],a["test"],a.get("ped_rule")) for a in args]
 
 
-def get_sub_score( metric_cache,poses,test):
+PED_LANE_MARGIN = 1.0      # m beyond the car's sides that still counts as "in our path"
+EGO_REAR_TO_FRONT = 1.461 + 2.588   # rear axle -> front bumper (m)
+EGO_HALF_WIDTH = 1.1485
 
+
+def ped_too_close_while_moving(simulated_states, cache_path, ped_rule):
+    """(n_proposals,) bool: while moving, the proposal gets within the buffer of a pedestrian that is
+    ahead of the front bumper and in or right beside our path (|lateral| < half width + PED_LANE_MARGIN).
+    Pedestrians standing beside the road or next to / behind the car do not count.
+
+    ped_rule = (buffer for ped_v2 samples, buffer for other samples, moving speed m/s).
+    Uses the scorer's ego polygons and the observation of the last score_proposals call."""
+    buf = ped_rule[0] if "ped_v2" in str(cache_path) else ped_rule[1]
+    obs = scorer._observation
+    peds = {t for t, o in obs.unique_objects.items() if o.tracked_object_type == TrackedObjectType.PEDESTRIAN}
+    close = np.zeros(len(simulated_states), dtype=bool)
+    if not peds:
+        return close
+    x, y = simulated_states[..., StateIndex.X], simulated_states[..., StateIndex.Y]
+    h = simulated_states[..., StateIndex.HEADING]
+    speed = np.hypot(simulated_states[..., StateIndex.VELOCITY_X], simulated_states[..., StateIndex.VELOCITY_Y])
+    for t in range(simulated_states.shape[1]):
+        moving = np.where((speed[:, t] > ped_rule[2]) & ~close)[0]
+        if len(moving) == 0:
+            continue
+        occ = obs[t]
+        toks = [tok for tok in occ.tokens if tok in peds]
+        if not toks:
+            continue
+        geoms = np.array([occ[tok] for tok in toks], dtype=object)
+        cxy = np.array([[g.centroid.x, g.centroid.y] for g in geoms])                       # (P, 2)
+        dx = cxy[None, :, 0] - x[moving, t, None]
+        dy = cxy[None, :, 1] - y[moving, t, None]
+        c, s = np.cos(h[moving, t])[:, None], np.sin(h[moving, t])[:, None]
+        lon, lat = dx * c + dy * s, -dx * s + dy * c                                        # (M, P) in the car frame
+        in_path = (lon > EGO_REAR_TO_FRONT - 0.5) & (np.abs(lat) < EGO_HALF_WIDTH + PED_LANE_MARGIN)
+        if not in_path.any():
+            continue
+        d = shapely.distance(scorer._ego_polygons[moving, t][:, None], geoms[None])          # (M, P)
+        close[moving[((d < buf) & in_path).any(1)]] = True
+    return close
+
+
+def get_sub_score( metric_cache,poses,test,ped_rule=None):
+
+    cache_path = metric_cache
     try:
         with lzma.open(metric_cache, "rb") as f:
             metric_cache = pickle.load(f)
@@ -34,10 +81,10 @@ def get_sub_score( metric_cache,poses,test):
         n_proposals = len(poses)
         n_poses = 40
         n_col = 2
-        scores = np.zeros((n_proposals, 7))
+        scores = np.zeros((n_proposals, 6))   # NC, DAC, EP, TTC, C, final (was 7 columns by mistake)
         corners = np.zeros((n_proposals, n_poses, n_col, 4, 2))
         labels = np.zeros((n_proposals, n_poses, n_col), dtype=bool)
-        ego_areas = np.zeros((n_proposals, n_poses - 1, n_poses - 1), dtype=bool)
+        ego_areas = np.zeros((n_proposals, n_poses, len(EgoAreaIndex) - 1), dtype=bool)   # matches _ego_areas[:,1:,1:]
         return scores, corners, labels, ego_areas
 
     initial_ego_state = metric_cache.ego_state
@@ -83,6 +130,10 @@ def get_sub_score( metric_cache,poses,test):
     scores=np.stack([no_at_fault_collisions,drivable_area_compliance,#driving_direction_compliance,
                      ego_progress,time_to_collision_within_bound,comfort,final_scores
                      ],axis=-1)#[:,None]
+
+    if ped_rule is not None:   # E6: no-collision target also fails when passing a pedestrian too closely while moving
+        scores = scores.copy()
+        scores[ped_too_close_while_moving(simulated_states, cache_path, ped_rule), 0] = 0.0
 
     if not test:
         for i in range(len(scores)):
