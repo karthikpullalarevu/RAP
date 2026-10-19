@@ -130,6 +130,10 @@ class RAPModel(nn.Module):
         if self.b2d:
             ego_status[:,1:3]=0
 
+        if getattr(self._config, "zero_ego_accel", False):   # ego_status = pose(3), velocity(2), acceleration(2), command(4)
+            ego_status = ego_status.clone()
+            ego_status[:, 5:7] = 0
+
         image_feature = self._backbone(camera_feature,img_metas=features)  # b,64,64,64
 
         output={}

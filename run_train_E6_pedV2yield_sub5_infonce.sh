@@ -37,6 +37,9 @@ export NCCL_P2P_DISABLE=1
 export NCCL_IB_DISABLE=1
 export CUDA_VISIBLE_DEVICES=0,1,2,3
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
+# The system disk (/tmp) is full: keep temp files on /datahdd2 (a full /tmp crashed epoch 2 at validation)
+export TMPDIR=/datahdd2/karthik/tmp
+mkdir -p "$TMPDIR"
 export ip_head="128.2.220.69:6379"
 export redis_password="dummy"
 export num_nodes="1"

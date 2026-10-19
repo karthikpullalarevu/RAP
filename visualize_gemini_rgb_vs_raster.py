@@ -46,6 +46,7 @@ def predict(agent, agent_input):
 
 
 EGO_MPH = None      # set by --ego-mph: overrides the speed the model is told ego has now
+EGO_ACCEL = None    # set by --ego-accel: overrides ego's current longitudinal acceleration input (m/s2)
 
 
 def end_mph(traj):
@@ -59,6 +60,8 @@ def make_input(loader, token, mode, front=None):
     if EGO_MPH is not None:
         a.ego_statuses[-1].ego_velocity[0] = EGO_MPH / B.MPH
         a.ego_statuses[-1].ego_velocity[1] = 0.0
+    if EGO_ACCEL is not None:
+        a.ego_statuses[-1].ego_acceleration[0] = EGO_ACCEL
     cams = a.cameras[-1]
     if mode == "raster":
         for name in CAMS:
@@ -129,19 +132,25 @@ def draw(rows, title, out_path):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--model", action="append", required=True, help='"Label=/path/to.ckpt"')
+    ap.add_argument("--model", action="append", required=True,
+                    help='"Label=/path/to.ckpt", or "Label=/path/to.ckpt::pick_mode" (final, gated_pdms, log_barrier)')
     ap.add_argument("--output-dir", required=True)
     ap.add_argument("--closer", type=float, default=1.5)
     ap.add_argument("--ego-mph", type=float, default=None, help="Override ego's current speed input (mph)")
+    ap.add_argument("--ego-accel", type=float, default=None,
+                    help="Override ego's current longitudinal acceleration input, m/s2 (e.g. -2 = braking)")
     ap.add_argument("--max-scenes", type=int, default=None)
+    ap.add_argument("--walk", choices=["left", "right"], default="left",
+                    help="Which way the drawn pedestrian box faces (walks), seen from ego")
     args = ap.parse_args()
+    heading = math.pi / 2 if args.walk == "left" else -math.pi / 2
     out = Path(args.output_dir)
     out.mkdir(parents=True, exist_ok=True)
-    global EGO_MPH
-    EGO_MPH = args.ego_mph
+    global EGO_MPH, EGO_ACCEL
+    EGO_MPH, EGO_ACCEL = args.ego_mph, args.ego_accel
 
     models = [m.split("=", 1) for m in args.model]
-    agents = [(name, V.load_agent(ckpt), B.COLORS[i]) for i, (name, ckpt) in enumerate(models)]
+    agents = [(name, V.load_agent(*ckpt.split("::", 1)), B.COLORS[i]) for i, (name, ckpt) in enumerate(models)]
     dets = {(e["token"], e["suffix"]): e["detections"] for e in json.load(open(B.LIDAR_RESULTS))}
 
     import glob, pickle
@@ -158,7 +167,8 @@ def main():
     loader = SceneLoader(sensor_blobs_path=Path(B.TEST_BLOBS), data_path=Path(B.TEST_LOGS), scene_filter=sf,
                          sensor_config=agents[0][1].get_sensor_config())
     scene_tokens = sorted(loader.tokens)[:args.max_scenes] if args.max_scenes else sorted(loader.tokens)
-    print(f"{len(scene_tokens)} scenes, models {[m[0] for m in models]}, box {args.closer} m closer", flush=True)
+    print(f"{len(scene_tokens)} scenes, models {[m[0] for m in models]}, box {args.closer} m closer, "
+          f"walking {args.walk}", flush=True)
 
     rows = []
     for token in scene_tokens:
@@ -180,7 +190,7 @@ def main():
             n = math.hypot(*ped)
             ped_drawn = (ped[0] * (1 - args.closer / n), ped[1] * (1 - args.closer / n))
             photo = cv2.cvtColor(cv2.imread(front_path), cv2.COLOR_BGR2RGB)
-            raster = G.draw_ped_cuboid(raster0.copy(), M, ped_drawn)
+            raster = G.draw_ped_cuboid(raster0.copy(), M, ped_drawn, heading=heading)
             ped_raster = box_centre(ped_drawn)
 
             res = {"photo": [], "raster": []}
@@ -189,7 +199,7 @@ def main():
                     traj = predict(agent, make_input(loader, token, mode, front))
                     gap, _, _ = B.closest_gap(traj, ped_xy)
                     res[mode].append(dict(name=name, color=color, traj=traj))
-                    rows.append(dict(token=token, variant=v, model=name, input=mode, ego_mph=ego_mph,
+                    rows.append(dict(token=token, variant=v, model=name, input=mode, walk=args.walk, ego_accel=args.ego_accel, ego_mph=ego_mph,
                                      ped_x=ped_xy[0], ped_y=ped_xy[1], ped_dist=math.hypot(*ped_xy),
                                      dist_5s_no_ped=float(no_ped[(name, mode)][:, 0].max()),
                                      dist_5s_ped=float(traj[:, 0].max()), closest_gap=gap, hits=int(gap <= 0),
@@ -199,9 +209,10 @@ def main():
             draw([(photo, cam, ped, f"pedestrian\n{n:.1f} m away", res["photo"],
                    "Photo input (pedestrian added with Gemini)"),
                   (raster, cam, ped_raster, f"pedestrian box\n{math.hypot(*ped_raster):.1f} m away", res["raster"],
-                   f"Raster input (pedestrian box drawn {args.closer:g} m closer than measured)")],
+                   f"Raster input (pedestrian box drawn {args.closer:g} m closer than measured, walking {args.walk})")],
                  f"{token} · variant {v} · ego at {ego_mph:.0f} mph"
-                 + ("" if EGO_MPH is None else f" (speed input set; recorded {recorded_mph:.0f} mph)"),
+                 + ("" if EGO_MPH is None else f" (speed input set; recorded {recorded_mph:.0f} mph)")
+                 + ("" if EGO_ACCEL is None else f" · braking input {EGO_ACCEL:g} m/s²"),
                  str(out / f"{token}_v{v}.jpg"))
         print(f"done {token}", flush=True)
 

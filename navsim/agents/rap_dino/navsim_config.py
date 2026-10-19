@@ -79,6 +79,9 @@ class RAPConfig:
     # how the final trajectory is picked from the 64 proposals:
     # "final" = argmax of the final PDMS output; "gated_pdms" / "log_barrier" = combine the 5 sub-scores
     pick_mode: str = "final"
+    # set ego's current acceleration input (ax, ay) to 0, in training and testing: in ped_v2 the cached ego state
+    # already shows PDM-Closed braking for the pedestrian, which the model uses as a "stop" shortcut
+    zero_ego_accel: bool = False
     agent_class_weight: float = 1.0
     agent_box_weight: float = 0.1
     bev_semantic_weight: float = 1.0

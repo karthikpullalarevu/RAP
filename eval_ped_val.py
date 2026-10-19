@@ -43,7 +43,7 @@ DT = 0.5
 STOP_SPEED = 0.5
 
 
-def load_agent(ckpt, distill, pdm):
+def load_agent(ckpt, distill, pdm, pick_mode="final"):
     from navsim.agents.rap_dino.rap_agent import RAPAgent
     from navsim.agents.rap_dino.navsim_config import RAPConfig
     from nuplan.planning.simulation.trajectory.trajectory_sampling import TrajectorySampling
@@ -53,6 +53,7 @@ def load_agent(ckpt, distill, pdm):
     config.trajectory_sampling = TrajectorySampling(time_horizon=5, interval_length=0.5)
     config.distill_feature = distill
     config.pdm_scorer = pdm
+    config.pick_mode = pick_mode
     config.train_metric_cache_path = "./cache/train_metric_cache"
 
     agent = RAPAgent(config, lr=1e-4, checkpoint_path=str(ckpt))
@@ -105,6 +106,8 @@ def main():
     ap.add_argument("--workers", type=int, default=8)
     ap.add_argument("--score-procs", type=int, default=32)
     ap.add_argument("--limit", type=int, default=None)
+    ap.add_argument("--pick-mode", default="final", choices=["final", "gated_pdms", "log_barrier"],
+                    help="How the proposal is picked from the predicted scores (see rap_model.pick_score)")
     ap.add_argument("--tag", default="", help="Suffix for the output folder, e.g. epoch12 -> ped_val_batch3_epoch12")
     args = ap.parse_args()
 
@@ -113,7 +116,7 @@ def main():
     out_dir = EXPERIMENTS_ROOT / args.exp_name / ("ped_val_batch3" + (f"_{args.tag}" if args.tag else ""))
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    agent = load_agent(args.ckpt, not args.no_distill, not args.no_pdm)
+    agent = load_agent(args.ckpt, not args.no_distill, not args.no_pdm, args.pick_mode)
     metric_paths = agent.test_metric_cache_paths
 
     data = CacheOnlyDataset(cache_path=str(args.val_cache),
