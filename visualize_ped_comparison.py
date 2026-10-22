@@ -28,7 +28,7 @@ os.environ['NUPLAN_MAPS_ROOT'] = '/datahdd/karthik/dataset/nuplan-maps-v1.0'
 BL_LABEL, PD_LABEL = "Baseline", "Ped V1"
 
 
-def load_agent(checkpoint_path, pick_mode="final"):
+def load_agent(checkpoint_path, pick_mode="final", zero_ego_accel=False):
     from navsim.agents.rap_dino.rap_agent import RAPAgent
     from navsim.agents.rap_dino.navsim_config import RAPConfig
     from nuplan.planning.simulation.trajectory.trajectory_sampling import TrajectorySampling
@@ -40,6 +40,7 @@ def load_agent(checkpoint_path, pick_mode="final"):
     config.pdm_scorer = True
     config.train_metric_cache_path = './cache/train_metric_cache'
     config.pick_mode = pick_mode
+    config.zero_ego_accel = zero_ego_accel     # E7/E8: model sets ego ax, ay input to 0
 
     agent = RAPAgent(config, lr=1e-4, checkpoint_path=checkpoint_path)
     agent.initialize()

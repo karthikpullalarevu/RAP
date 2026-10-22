@@ -41,7 +41,7 @@ TEST_BLOBS = "/datahdd2/karthik/dataset/nuplan-v1.1/sensor_blobs/test"
 HALF_LEN, HALF_WID, AXLE_TO_CENTER = 2.588, 1.1485, 1.461   # ego box, rear axle -> box centre
 PED_RADIUS = 0.35
 MPH = 2.23694
-COLORS = ["#2a78d6", "#eb6834", "#1baf7a"]                  # fixed order, one per model
+COLORS = ["#2a78d6", "#eb6834", "#1baf7a", "#a23fb0"]       # fixed order, one per model
 INK, MUTED = "#222222", "#777777"
 
 

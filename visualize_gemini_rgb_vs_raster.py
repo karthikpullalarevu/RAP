@@ -133,7 +133,7 @@ def draw(rows, title, out_path):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--model", action="append", required=True,
-                    help='"Label=/path/to.ckpt", or "Label=/path/to.ckpt::pick_mode" (final, gated_pdms, log_barrier)')
+                    help='"Label=/path/to.ckpt", or "Label=/path/to.ckpt::pick_mode" (final, gated_pdms, log_barrier), add "::noaccel" for E7/E8')
     ap.add_argument("--output-dir", required=True)
     ap.add_argument("--closer", type=float, default=1.5)
     ap.add_argument("--ego-mph", type=float, default=None, help="Override ego's current speed input (mph)")
@@ -150,7 +150,10 @@ def main():
     EGO_MPH, EGO_ACCEL = args.ego_mph, args.ego_accel
 
     models = [m.split("=", 1) for m in args.model]
-    agents = [(name, V.load_agent(*ckpt.split("::", 1)), B.COLORS[i]) for i, (name, ckpt) in enumerate(models)]
+    def load(spec):     # "path[::pick_mode[::noaccel]]"
+        parts = spec.split("::")
+        return V.load_agent(parts[0], parts[1] if len(parts) > 1 else "final", len(parts) > 2 and parts[2] == "noaccel")
+    agents = [(name, load(ckpt), B.COLORS[i]) for i, (name, ckpt) in enumerate(models)]
     dets = {(e["token"], e["suffix"]): e["detections"] for e in json.load(open(B.LIDAR_RESULTS))}
 
     import glob, pickle
