@@ -27,7 +27,32 @@ import visualize_ped_comparison as V
 import visualize_ped_gemini_bev as B
 import visualize_gemini_raster_ped as G
 from visualize_gemini_rgb_vs_raster import predict, make_input, box_centre
-from visualize_old_vs_new_loss import MODELS, EXAMPLES, CLOSER, SURFACE, INK, draw_image
+from visualize_old_vs_new_loss import MODELS as _MODELS, EXAMPLES, CLOSER, SURFACE, INK, GRID, draw_image
+from matplotlib.patches import Polygon
+
+COLORS = {"old loss": "#184f95", "new loss": "#eb6834"}          # dark blue, orange
+MODELS = [(n, c, m, COLORS[n]) for n, c, m, _ in _MODELS]
+PED_C = INK                                                       # pedestrian (orange is taken by the new loss)
+
+
+def draw_bev(ax, plans, ped):
+    """Top-down: car, both plans (dots every 0.5 s), pedestrian if given. Car points up."""
+    P = lambda x, y: (-np.asarray(y), np.asarray(x))
+    ax.add_patch(Polygon(np.column_stack(P(*B.car_corners((0, 0, 0)).T)), fc="#d6d5cf", ec=INK, lw=1, zorder=3))
+    for _, traj, color in plans:
+        path = np.vstack([[0, 0], traj[:, :2]])
+        ax.plot(*P(path[:, 0], path[:, 1]), "-o", color=color, lw=3.5, ms=6, mec="white", mew=1, zorder=4)
+    top = max([25.0] + [t[:, 0].max() + 3 for _, t, _ in plans] + ([ped[0] + 4] if ped is not None else []))
+    if ped is not None:
+        ax.plot(*P(*ped), "o", color=PED_C, ms=12, mec="white", mew=1.5, zorder=5)
+    ax.set_ylim(-4, top)
+    ax.set_xlim(-8, 8)
+    ax.set_aspect("auto")                  # forward axis squeezed to fit; sideways range fixed at +-8 m
+    ax.set_xticks([])
+    ax.set_yticks([])
+    ax.set_facecolor("#f4f4f2")
+    for s_ in ax.spines.values():
+        s_.set_visible(False)
 
 
 def main():
@@ -55,7 +80,8 @@ def main():
 
     for inp, name in (("photo", "rgb"), ("raster", "raster")):
         exs = [e for e in EXAMPLES if e[0] == inp]
-        fig, axes = plt.subplots(2, len(exs), figsize=(4.6 * len(exs), 4.0))
+        fig, axes = plt.subplots(2, 2 * len(exs), figsize=(6.4 * len(exs), 4.4),
+                                 gridspec_kw={"width_ratios": [3.0, 1.3] * len(exs)})
         for col, (_, token, v, _) in enumerate(exs):
             base = loader.get_agent_input_from_token(token)
             cam = base.cameras[-1].cam_f0
@@ -70,14 +96,17 @@ def main():
                 drawn = (ped[0] * (1 - CLOSER / n), ped[1] * (1 - CLOSER / n))
                 no_ped = np.asarray(cam.rendered_image).astype(np.uint8)
                 with_ped = G.draw_ped_cuboid(no_ped.copy(), M, drawn)
-            for row, (img, front) in enumerate([(with_ped, with_ped), (no_ped, None)]):
+            ped_xy = B.ped_position(dets.get((token, f"front_{v}"), []), M) if inp == "photo" else box_centre(drawn)
+            for row, (img, front, ped) in enumerate([(with_ped, with_ped, ped_xy), (no_ped, None, None)]):
                 plans = [(n_, predict(a, make_input(loader, token, inp, front)), c) for n_, a, c in agents]
-                draw_image(axes[row, col], img, cam, plans)
+                draw_image(axes[row, 2 * col], img, cam, plans)
+                draw_bev(axes[row, 2 * col + 1], plans, ped)
             print("done", inp, token, v, flush=True)
         fig.legend(handles=[Line2D([], [], color=c, lw=4, marker="o", ms=7, mec="white", label=n_)
-                            for n_, _, _, c in MODELS],
-                   loc="lower center", ncol=2, frameon=False, fontsize=14, bbox_to_anchor=(0.5, 0.0))
-        fig.subplots_adjust(left=0.005, right=0.995, top=0.995, bottom=0.11, wspace=0.02, hspace=0.03)
+                            for n_, _, _, c in MODELS]
+                   + [Line2D([], [], color=PED_C, marker="o", ls="none", ms=9, mec="white", label="pedestrian")],
+                   loc="lower center", ncol=3, frameon=False, fontsize=14, bbox_to_anchor=(0.5, 0.0))
+        fig.subplots_adjust(left=0.005, right=0.995, top=0.995, bottom=0.11, wspace=0.03, hspace=0.04)
         fig.savefig(out / f"old_vs_new_loss_{name}.png", dpi=130)
         plt.close(fig)
     print(f"saved to {out}")
