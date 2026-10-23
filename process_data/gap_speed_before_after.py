@@ -72,6 +72,58 @@ def compute(workers):
 UNSAFE_MPH = 1.0                                   # red box: under 1 m from the pedestrian while moving faster than this
 
 
+A_SAFE, MARGIN, BAND = 4.0, 1.0, 4.0     # m/s2 firm braking, m spare room, m width of the ideal training band
+
+
+def safe_distance(mph):
+    """Smallest safe closest distance at this speed: spare room + stopping distance at A_SAFE (0.5 m when creeping)."""
+    v = np.asarray(mph) / Y.MPH
+    return np.where(np.asarray(mph) <= 1.0, 0.5, MARGIN + v ** 2 / (2 * A_SAFE))
+
+
+def plot_zones():
+    """Before / after with speed-dependent zones: unsafe (below the stopping-distance curve), ideal for training
+    (just above it), safe."""
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    from matplotlib.patches import Patch
+    d = pd.read_csv(OUT / "gap_speed_samples.csv")
+    before = d[["gap_before", "mph_before"]].dropna().to_numpy()
+    after = d[["gap_after", "mph_after"]].dropna().to_numpy()
+    BLUE, INK, MUTED, RED, GREEN = "#2a78d6", "#222222", "#777777", "#d62728", "#1baf7a"
+    sp = np.linspace(0, 42, 400)
+    curve = safe_distance(sp)
+    fig, axes = plt.subplots(1, 2, figsize=(16, 7.5), sharey=True)
+    for ax, x, title in ((axes[0], before, "Before: original labels (PDM-Closed)"),
+                         (axes[1], after, "After: edited labels (used to train E6)")):
+        ax.fill_between(sp, 0, curve, color=RED, alpha=0.12, lw=0)
+        ax.fill_between(sp, curve, curve + BAND, color=GREEN, alpha=0.16, lw=0)
+        ax.plot(sp, curve, color=RED, lw=1.5)
+        ax.scatter(x[:, 1], x[:, 0], s=4, alpha=0.18, color=BLUE, lw=0)
+        need = safe_distance(x[:, 1])
+        unsafe = (x[:, 0] < need).mean()
+        ideal = ((x[:, 0] >= need) & (x[:, 0] < need + BAND)).mean()
+        ax.set_title(f"{title}\n{len(x):,} samples · unsafe {unsafe:.0%} · ideal band {ideal:.0%} · "
+                     f"far {1 - unsafe - ideal:.0%}", loc="left", fontsize=13)
+        ax.set_xlim(-0.5, 42)
+        ax.set_ylim(0, 15)
+        ax.set_xlabel("Ego speed at the closest moment (mph)", fontsize=12)
+        ax.grid(color="#eeeeee")
+        for s_ in ("top", "right"):
+            ax.spines[s_].set_visible(False)
+    axes[0].set_ylabel("Closest distance, car body to pedestrian (m)", fontsize=12)
+    axes[1].legend(handles=[Patch(fc=RED, alpha=0.3, label="unsafe: can't stop before the pedestrian"),
+                            Patch(fc=GREEN, alpha=0.35, label=f"ideal for training (within {BAND:g} m above)"),
+                            Patch(fc="white", ec=MUTED, label="safe, far from the pedestrian")],
+                   loc="upper right", frameon=False, fontsize=11)
+    fig.text(0.5, 0.005, f"Red curve = {MARGIN:g} m + stopping distance at {A_SAFE:g} m/s² ({A_SAFE * Y.MPH:.0f} mph/s); "
+             "0.5 m when creeping (under 1 mph). One dot per training sample at its closest moment within the 5 s label.",
+             ha="center", fontsize=10, color=MUTED)
+    fig.tight_layout(rect=(0, 0.03, 1, 1))
+    fig.savefig(OUT / "gap_vs_speed_before_after_zones.png", dpi=150)
+
+
 def plot():
     import matplotlib
     matplotlib.use("Agg")
@@ -116,5 +168,6 @@ if __name__ == "__main__":
     ap = argparse.ArgumentParser()
     ap.add_argument("--workers", type=int, default=48)
     ap.add_argument("--plot", action="store_true")
+    ap.add_argument("--zones", action="store_true", help="before/after with speed-dependent safe / ideal / unsafe zones")
     args = ap.parse_args()
-    plot() if args.plot else compute(args.workers)
+    plot_zones() if args.zones else plot() if args.plot else compute(args.workers)
