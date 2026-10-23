@@ -72,7 +72,7 @@ def compute(workers):
 UNSAFE_MPH = 1.0                                   # red box: under 1 m from the pedestrian while moving faster than this
 
 
-A_SAFE, MARGIN, BAND = 4.0, 1.0, 4.0     # m/s2 firm braking, m spare room, m width of the ideal training band
+A_SAFE, MARGIN, BAND = 4.0, 1.0, 5.0     # m/s2 firm braking, m spare room, m width of the ideal training band
 
 
 def safe_distance(mph):
@@ -87,7 +87,6 @@ def plot_zones():
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
-    from matplotlib.patches import Patch
     d = pd.read_csv(OUT / "gap_speed_samples.csv")
     before = d[["gap_before", "mph_before"]].dropna().to_numpy()
     after = d[["gap_after", "mph_after"]].dropna().to_numpy()
@@ -113,10 +112,6 @@ def plot_zones():
         for s_ in ("top", "right"):
             ax.spines[s_].set_visible(False)
     axes[0].set_ylabel("Closest distance, car body to pedestrian (m)", fontsize=12)
-    axes[1].legend(handles=[Patch(fc=RED, alpha=0.3, label="unsafe: can't stop before the pedestrian"),
-                            Patch(fc=GREEN, alpha=0.35, label=f"ideal for training (within {BAND:g} m above)"),
-                            Patch(fc="white", ec=MUTED, label="safe, far from the pedestrian")],
-                   loc="upper right", frameon=False, fontsize=11)
     fig.text(0.5, 0.005, f"Red curve = {MARGIN:g} m + stopping distance at {A_SAFE:g} m/s² ({A_SAFE * Y.MPH:.0f} mph/s); "
              "0.5 m when creeping (under 1 mph). One dot per training sample at its closest moment within the 5 s label.",
              ha="center", fontsize=10, color=MUTED)
