@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """One top-down slide of the yield edit: original vs edited 5 s trajectory for one training sample.
 
-Car frame at the sample (car drives to the right). Dots every 1 s on both trajectories and on the pedestrian, with car
-boxes drawn at the moment the original trajectory comes closest to the pedestrian.
+Car frame at the sample, car pointing up. Distance to pedestrian = car body (front) to pedestrian, now or when the
+pedestrian first appears in the 5 s.
 
 Usage:
     python process_data/plot_yield_edit_bev.py \
@@ -41,81 +41,53 @@ def main():
     ox, oy, oh = sc.ego[ta, :3]
     c, s = math.cos(oh), math.sin(oh)
 
-    def P(x, y):                                       # world -> car frame, plotted with the car pointing up
+    def P(x, y):                                       # world -> car frame, car pointing up
         dx, dy = np.asarray(x) - ox, np.asarray(y) - oy
-        fwd, left = dx * c + dy * s, -dx * s + dy * c
-        return fwd, left                               # car drives to the right, left is up
+        return -(-dx * s + dy * c), dx * c + dy * s
 
-    orig = sc.ego[ta:ta + m, :3]
-    ex, ey, eh = sc.path.pose(r["s"][:m])
-    edit = np.column_stack([ex, ey, eh])
-    g_orig = sc.gaps(ta, sc.s_pdm[ta:ta + m])
-    g_edit = sc.gaps(ta, r["s"][:m])
-    k = int(np.argmin(g_orig))                         # moment the original comes closest
-
-    def car(ax, pose, color, fill):
-        x, y, h = pose
-        cc, ss = math.cos(h), math.sin(h)
-        pts = [(x + a * cc - b * ss, y + a * ss + b * cc) for a, b in
-               [(Y.HALF_LEN, Y.HALF_WID), (Y.HALF_LEN, -Y.HALF_WID), (-Y.HALF_LEN, -Y.HALF_WID), (-Y.HALF_LEN, Y.HALF_WID)]]
-        ax.add_patch(Polygon(np.column_stack(P(*np.array(pts).T)), fc=fill, ec=color, lw=2, zorder=4))
+    orig = sc.ego[ta:ta + m, :2]
+    ex, ey, _ = sc.path.pose(r["s"][:m])
 
     plt.rcParams.update({"figure.facecolor": SURFACE, "savefig.facecolor": SURFACE, "axes.facecolor": SURFACE})
-    fig, ax = plt.subplots(figsize=(16, 7))
-    car(ax, sc.ego[ta, :3], INK, "#d6d5cf")                                   # car now
-    for traj, color, name in [(orig, ORIG, "original trajectory"), (edit, EDIT, "edited trajectory")]:
-        ax.plot(*P(traj[:, 0], traj[:, 1]), color=color, lw=4, label=name, solid_capstyle="round", zorder=3)
-        ax.plot(*P(traj[::Y.HZ, 0], traj[::Y.HZ, 1]), "o", color=color, ms=8, mec="white", mew=1.5, zorder=5)
-    car(ax, orig[k], ORIG, "none")
-    car(ax, edit[k], EDIT, "none")
-    for tr in sc.peds:
-        p = tr[ta:ta + m]
-        ok = ~np.isnan(p[:, 0])
-        if not ok.any():
-            continue
-        ax.plot(*P(p[ok, 0], p[ok, 1]), color=PEDC, lw=2, ls=":", zorder=3)
-        for i in range(0, m, Y.HZ):
-            if ok[i]:
-                ax.plot(*P(p[i, 0], p[i, 1]), "o", color=PEDC, ms=8 if i else 12, mec="white", mew=1.5, zorder=6)
-                ax.annotate(f"{i // Y.HZ} s", P(p[i, 0], p[i, 1]), xytext=(7, 5), textcoords="offset points",
-                            fontsize=10, color=PEDC)
-        if ok[k]:
-            ax.plot(*P(p[k, 0], p[k, 1]), "o", color=PEDC, ms=14, mec=INK, mew=1.5, zorder=7)
-    ax.plot([], [], "o", color=PEDC, ms=10, mec="white", label="pedestrian")
-    ax.annotate(f"{g_orig[k]:.1f} m", P(*orig[k, :2]), xytext=(0, -38), textcoords="offset points", fontsize=14,
-                color=MUTED, fontweight="bold", ha="center")
-    ax.annotate(f"{g_edit[k]:.1f} m", P(*edit[k, :2]), xytext=(0, -38), textcoords="offset points", fontsize=14,
-                color=EDIT, fontweight="bold", ha="center")
+    fig, ax = plt.subplots(figsize=(7, 10))
+    cc, ss = math.cos(oh), math.sin(oh)
+    corners = [(ox + a * cc - b * ss, oy + a * ss + b * cc) for a, b in
+               [(Y.HALF_LEN, Y.HALF_WID), (Y.HALF_LEN, -Y.HALF_WID), (-Y.HALF_LEN, -Y.HALF_WID), (-Y.HALF_LEN, Y.HALF_WID)]]
+    ax.add_patch(Polygon(np.column_stack(P(*np.array(corners).T)), fc="#d6d5cf", ec=INK, lw=1.5, zorder=4))
+    ax.plot(*P(orig[:, 0], orig[:, 1]), color=ORIG, lw=5, label="original trajectory", solid_capstyle="round", zorder=3)
+    ax.plot(*P(ex, ey), color=EDIT, lw=5, label="edited trajectory", solid_capstyle="round", zorder=3)
 
-    v0 = sc.v_pdm[ta] * Y.MPH
-    d0 = np.inf                                        # body gap to the pedestrian, now or when it first appears
+    d0 = np.inf
     for tr in sc.peds:
         p = tr[ta:ta + m]
         ok = np.where(~np.isnan(p[:, 0]))[0]
-        if len(ok):
-            i = ok[0]
-            d0 = min(d0, float(Y.box_gap(*sc.ego[ta, :3], p[i, 0], p[i, 1], p[i, 2])))
-    ax.text(0.02, 0.98, f"vx = {v0:.0f} mph\ndistance to pedestrian = {d0:.0f} m", transform=ax.transAxes,
-            fontsize=15, color=INK, va="top")
-    ax.text(0.02, 0.80, f"boxes: both cars at {k / Y.HZ:.1f} s  ·  dots every 1 s", transform=ax.transAxes,
-            fontsize=11, color=MUTED, va="top")
-    xs, ys = P(np.r_[orig[:, 0], edit[:, 0]], np.r_[orig[:, 1], edit[:, 1]])
-    right = max(xs.max(), 10) + 6
-    ax.set_xlim(-6, right)
-    ax.set_ylim(-right * 7 / 16 / 2 * 1.6, right * 7 / 16 / 2 * 1.6)
+        if not len(ok):
+            continue
+        i0, i1 = ok[0], ok[-1]
+        d0 = min(d0, float(Y.box_gap(*sc.ego[ta, :3], p[i0, 0], p[i0, 1], p[i0, 2])))
+        ax.annotate("", xy=P(p[i1, 0], p[i1, 1]), xytext=P(p[i0, 0], p[i0, 1]),
+                    arrowprops=dict(arrowstyle="-|>", color=PEDC, lw=2.5, mutation_scale=20), zorder=5)
+        ax.plot(*P(p[i0, 0], p[i0, 1]), "o", color=PEDC, ms=13, mec="white", mew=2, zorder=6)
+    ax.plot([], [], "o", color=PEDC, ms=11, mec="white", label="pedestrian")
+
+    ax.text(0.03, 0.98, f"vx = {sc.v_pdm[ta] * Y.MPH:.0f} mph\ndistance to pedestrian = {d0:.0f} m",
+            transform=ax.transAxes, fontsize=15, color=INK, va="top")
+    xs, ys = P(np.r_[orig[:, 0], ex], np.r_[orig[:, 1], ey])
+    top = max(ys.max(), 10) + 5
+    ax.set_ylim(-5, top)
+    ax.set_xlim(-top * 0.35, top * 0.35)
     ax.set_aspect("equal")
     ax.grid(color=GRID, lw=0.6)
     ax.set_axisbelow(True)
-    ax.set_xlabel("metres ahead", color=MUTED)
-    ax.set_ylabel("metres (left ↑ ↓ right)", color=MUTED)
+    ax.set_ylabel("metres ahead", color=MUTED)
     for sp in ax.spines.values():
         sp.set_visible(False)
     ax.tick_params(colors=MUTED)
-    ax.legend(loc="upper right", frameon=False, fontsize=13)
+    ax.legend(loc="lower right", frameon=False, fontsize=13)
     fig.tight_layout()
     out = args.out or str(Y.OUT / f"bev_original_vs_edited_{args.scene[-12:]}_{ta}.png")
     fig.savefig(out, dpi=150)
-    print(out, f"vx {v0:.1f} mph, gap now {d0:.1f} m, closest original {g_orig.min():.1f} m, edited {g_edit.min():.1f} m")
+    print(out)
 
 
 if __name__ == "__main__":
