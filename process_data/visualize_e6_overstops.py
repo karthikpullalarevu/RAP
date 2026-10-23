@@ -118,7 +118,7 @@ def predict(tokens, dirs, ckpt, pick_mode):
             feats = {k: v[None].cuda() for k, v in f.items()
                      if k not in ("camera_valid", "rendered_camera_feature", "frame_name")}
             out[tok] = agent.forward(feats)["trajectory"][0].float().cpu().numpy()
-            front[tok] = f["camera_feature"][0].permute(1, 2, 0).numpy()
+            front[tok] = f["camera_feature"][1].permute(1, 2, 0).numpy()     # cache order: CAM_B0, CAM_F0, CAM_L0, CAM_R0
     del agent
     torch.cuda.empty_cache()
     return out, front
