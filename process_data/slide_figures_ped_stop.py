@@ -95,7 +95,7 @@ def sweep_bars(df):
             for b, v in zip(bars, vals):
                 ax.text(b.get_x() + b.get_width() / 2, v + 0.015, fmt.format(v), ha="center", fontsize=11, color=INK2)
             ax.set_ylim(0, 1)
-            ax.yaxis.set_major_formatter(matplotlib.ticker.PercentFormatter(1.0))
+            ax.yaxis.set_major_formatter(matplotlib.ticker.PercentFormatter(1.0, decimals=0))
         ax.set_xticks(x, [MODEL_NAME[m].replace(" (", "\n(") for m in models])
         ax.set_ylabel(ylab)
         ax.set_title(title, fontsize=13, loc="left")
@@ -135,7 +135,7 @@ def gemini_braking():
         ax.set_xlim(-0.2, 2.7)
         ax.set_xlabel("ego braking given to the model as input")
         ax.set_ylim(0, 0.7)
-        ax.yaxis.set_major_formatter(matplotlib.ticker.PercentFormatter(1.0))
+        ax.yaxis.set_major_formatter(matplotlib.ticker.PercentFormatter(1.0, decimals=0))
         ax.set_title(title, fontsize=13, loc="left")
         clean(ax)
     axes[0].set_ylabel("plans that stop")
@@ -180,6 +180,105 @@ def crop_examples():
         im.crop((0, 0, w, int(100 + 2 * row) - 14)).save(OUT / dst)
 
 
+def sweep_speed(df):
+    """In-path reaction by the car's current speed, and per-scene speed vs stop rate."""
+    d = df[df.side.abs().le(1.5) & df.ahead.between(5, 20)].copy()
+    bands = ["< 10 mph", "10-20 mph", "> 20 mph"]
+    d["band"] = pd.cut(d.ego_mph, [-1, 10, 20, 99], labels=bands)
+    models = ["E4", "E8", "E6", "E7"]
+    g = d.groupby(["band", "model"], observed=True).agg(stop=("stopped", "mean"), n=("token", "nunique"))
+    fig, axes = plt.subplots(1, 2, figsize=(16, 6.4), gridspec_kw={"width_ratios": [1.15, 1]})
+    ax = axes[0]
+    x = np.arange(len(bands))
+    w = 0.2
+    for k, m in enumerate(models):
+        vals = [g.loc[(b, m), "stop"] for b in bands]
+        bars = ax.bar(x + (k - 1.5) * w, vals, w * 0.92, color=MODEL_C[m], ec=SURFACE, lw=1.5, label=MODEL_NAME[m])
+        for b, v in zip(bars, vals):
+            ax.text(b.get_x() + b.get_width() / 2, v + 0.012, f"{v:.0%}", ha="center", fontsize=9.5, color=INK2)
+    ax.set_xticks(x, [f"{b}\n({g.loc[(b, 'E4'), 'n']} scenes)" for b in bands])
+    ax.set_ylim(0, 0.85)
+    ax.yaxis.set_major_formatter(matplotlib.ticker.PercentFormatter(1.0, decimals=0))
+    ax.set_ylabel("plans that stop")
+    ax.set_xlabel("car's speed now")
+    ax.set_title("Stop rate with a pedestrian in our path (5-20 m ahead)", fontsize=13, loc="left")
+    ax.legend(frameon=False, fontsize=10.5, loc="upper right")
+    clean(ax)
+    ax = axes[1]
+    per = d.groupby(["token", "model"]).agg(stop=("stopped", "mean"), mph=("ego_mph", "first")).reset_index()
+    for k, m in enumerate(models):
+        p = per[per.model == m]
+        ax.scatter(p.mph + (k - 1.5) * 0.35, p.stop, s=70, color=MODEL_C[m], ec=SURFACE, lw=1.5, label=m, zorder=3)
+    ax.set_xlabel("car's speed now (mph)")
+    ax.set_ylabel("plans that stop (per scene)")
+    ax.yaxis.set_major_formatter(matplotlib.ticker.PercentFormatter(1.0, decimals=0))
+    ax.set_ylim(-0.04, 1.04)
+    ax.set_title("Each dot = one scene", fontsize=13, loc="left")
+    ax.legend(frameon=False, fontsize=10.5, loc="upper right")
+    clean(ax)
+    fig.suptitle("Pedestrian sweep: the models stop almost only when the car is already slow",
+                 fontsize=16, x=0.01, ha="left")
+    fig.tight_layout(rect=(0, 0, 1, 0.94))
+    fig.savefig(OUT / "08_sweep_by_speed.png", dpi=150)
+    plt.close(fig)
+
+
+def val_curves():
+    c = pd.read_csv(OUT / "val_curves.csv", index_col=0)
+    fig, ax = plt.subplots(figsize=(16, 6.4))
+    for m in ["E4", "E8", "E6", "E7"]:
+        s = c[m].dropna()
+        ax.plot(s.index, s.values, "-", color=MODEL_C[m], lw=2, marker="o", ms=5, mec=SURFACE, mew=1.2,
+                label=MODEL_NAME[m])
+        ax.text(s.index[-1] + 0.25, s.values[-1], m, fontsize=11, color=INK2, va="center")
+    ax.set_xlabel("epoch")
+    ax.set_ylabel("validation PDM score")
+    ax.set_xticks(range(0, 20, 2))
+    ax.set_xlim(-0.5, 20.5)
+    ax.legend(frameon=False, fontsize=11, loc="lower right")
+    clean(ax)
+    ax.set_title("Validation PDM score during training (val/score logged each epoch)", fontsize=16, loc="left")
+    fig.tight_layout()
+    fig.savefig(OUT / "09_val_curves.png", dpi=150)
+    plt.close(fig)
+
+
+def gemini_noaccel():
+    ds = [pd.read_csv(X / f"gemini_noAccel_E4E6E7E8/walk_{w}/rgb_vs_raster_summary.csv") for w in ("left", "right")]
+    d = pd.concat(ds)
+    d["model"] = d.model.str.replace(" gated", "")
+    d["stop_ped"] = d.end_mph_ped < 1
+    d["stop_np"] = d.end_mph_no_ped < 1
+    d["react"] = d.dist_5s_no_ped - d.dist_5s_ped
+    g = d.groupby(["input", "model"]).agg(stop_ped=("stop_ped", "mean"), stop_np=("stop_np", "mean"),
+                                          react=("react", "mean"), hits=("hits", "mean"))
+    models = ["E4", "E8", "E6", "E7"]
+    fig, axes = plt.subplots(1, 3, figsize=(16, 6.4))
+    x = np.arange(2)
+    for ax, (col, title, fmt, top) in zip(axes, [
+            ("stop_ped", "Stops, with pedestrian", "{:.0%}", 0.45),
+            ("react", "Plan shortened by pedestrian (m)", "{:.1f}", 5.5),
+            ("hits", "Plan goes through pedestrian's spot", "{:.0%}", 1.0)]):
+        for k, m in enumerate(models):
+            vals = [g.loc[(i, m), col] for i in ("photo", "raster")]
+            bars = ax.bar(x + (k - 1.5) * 0.2, vals, 0.18, color=MODEL_C[m], ec=SURFACE, lw=1.5, label=MODEL_NAME[m])
+            for b, v in zip(bars, vals):
+                ax.text(b.get_x() + b.get_width() / 2, v + top * 0.012, fmt.format(v), ha="center", fontsize=9,
+                        color=INK2)
+        ax.set_xticks(x, ["photo", "raster"])
+        ax.set_ylim(0, top)
+        if fmt.endswith("%}"):
+            ax.yaxis.set_major_formatter(matplotlib.ticker.PercentFormatter(1.0, decimals=0))
+        ax.set_title(title, fontsize=13, loc="left")
+        clean(ax)
+    axes[0].legend(frameon=False, fontsize=10, loc="upper left")
+    fig.suptitle("Gemini scenes with braking input 0: E7 / E8 react more to the pedestrian (288 runs per bar)",
+                 fontsize=16, x=0.01, ha="left")
+    fig.tight_layout(rect=(0, 0, 1, 0.94))
+    fig.savefig(OUT / "10_gemini_noaccel_4models.png", dpi=150)
+    plt.close(fig)
+
+
 def main():
     OUT.mkdir(parents=True, exist_ok=True)
     df = pd.read_csv(X / "ped_grid_sweep/run20/grid_sweep.csv")
@@ -192,6 +291,9 @@ def main():
     gemini_braking()
     overstop_groups()
     crop_examples()
+    sweep_speed(df)
+    val_curves()
+    gemini_noaccel()
     print(f"saved to {OUT}")
 
 
