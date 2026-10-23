@@ -279,6 +279,40 @@ def gemini_noaccel():
     plt.close(fig)
 
 
+def pedval_what_makes_stop():
+    """Held-out ped_v2: stop rate by the car's speed and by where the pedestrian is, E4 / E6 / E7 vs label."""
+    d = pd.read_csv(A / "13_e6_overstops/all_val_features.csv")
+    cols = [("e4_stops", "E4", MODEL_C["E4"]), ("pred_stops", "E6", MODEL_C["E6"]),
+            ("e7_stops", "E7 (E6, no braking input)", MODEL_C["E7"]), ("label_stops", "label (expert)", INK2)]
+    panels = [("mph", [-1, 2, 5, 10, 15, 20, 99], ["< 2", "2-5", "5-10", "10-15", "15-20", "> 20"], "car's speed now (mph)",
+               "By the car's speed: slower means stop"),
+              ("ped_to_path", [-1, 1.2, 3, 999], ["crosses\n(< 1.2 m)", "near\n(1.2-3 m)", "away\n(> 3 m)"],
+               "pedestrian's closest distance to our path in the next 4 s", "By where the pedestrian is: barely matters")]
+    fig, axes = plt.subplots(1, 2, figsize=(16, 6.4), gridspec_kw={"width_ratios": [1.5, 1]})
+    for ax, (col, bins, labels, xlab, title) in zip(axes, panels):
+        g = d.assign(b=pd.cut(d[col].replace(np.inf, 999), bins, labels=labels)).groupby("b", observed=True)
+        n = g.size()
+        x = np.arange(len(labels))
+        w = 0.2
+        for k, (c, name, color) in enumerate(cols):
+            v = g[c].mean().values
+            ax.bar(x + (k - 1.5) * w, v, w * 0.92, color=color, ec=SURFACE, lw=1.5, label=name,
+                   hatch="//" if c == "label_stops" else None, alpha=0.55 if c == "label_stops" else 1)
+        ax.set_xticks(x, [f"{l}\n({n[l]:,})" for l in labels])
+        ax.set_ylim(0, 1.05)
+        ax.yaxis.set_major_formatter(matplotlib.ticker.PercentFormatter(1.0, decimals=0))
+        ax.set_xlabel(xlab)
+        ax.set_title(title, fontsize=13, loc="left")
+        clean(ax)
+    axes[0].set_ylabel("plans that stop")
+    axes[0].legend(frameon=False, fontsize=10.5, loc="upper right")
+    fig.suptitle("Held-out ped_v2 (3,246 samples): what makes the models stop?  (sample counts under each bar group)",
+                 fontsize=16, x=0.01, ha="left")
+    fig.tight_layout(rect=(0, 0, 1, 0.94))
+    fig.savefig(OUT / "11_pedval_what_makes_stop.png", dpi=150)
+    plt.close(fig)
+
+
 def main():
     OUT.mkdir(parents=True, exist_ok=True)
     df = pd.read_csv(X / "ped_grid_sweep/run20/grid_sweep.csv")
@@ -294,6 +328,7 @@ def main():
     sweep_speed(df)
     val_curves()
     gemini_noaccel()
+    pedval_what_makes_stop()
     print(f"saved to {OUT}")
 
 
