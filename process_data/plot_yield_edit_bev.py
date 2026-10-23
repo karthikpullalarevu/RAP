@@ -56,6 +56,8 @@ def main():
     ax.add_patch(Polygon(np.column_stack(P(*np.array(corners).T)), fc="#d6d5cf", ec=INK, lw=1.5, zorder=4))
     ax.plot(*P(orig[:, 0], orig[:, 1]), color=ORIG, lw=5, label="original trajectory", solid_capstyle="round", zorder=3)
     ax.plot(*P(ex, ey), color=EDIT, lw=5, label="edited trajectory", solid_capstyle="round", zorder=3)
+    for x, y, col in [(orig[:, 0], orig[:, 1], ORIG), (ex, ey, EDIT)]:      # dots every 1 s
+        ax.plot(*P(x[Y.HZ::Y.HZ], y[Y.HZ::Y.HZ]), "o", color=col, ms=9, mec="white", mew=1.5, zorder=4)
 
     d0 = np.inf
     for tr in sc.peds:
@@ -68,6 +70,8 @@ def main():
         ax.annotate("", xy=P(p[i1, 0], p[i1, 1]), xytext=P(p[i0, 0], p[i0, 1]),
                     arrowprops=dict(arrowstyle="-|>", color=PEDC, lw=2.5, mutation_scale=20), zorder=5)
         ax.plot(*P(p[i0, 0], p[i0, 1]), "o", color=PEDC, ms=13, mec="white", mew=2, zorder=6)
+        sec = [i for i in range(0, m, Y.HZ) if i > i0 and not np.isnan(p[i, 0])]
+        ax.plot(*P(p[sec, 0], p[sec, 1]), "o", color=PEDC, ms=8, mec="white", mew=1.5, zorder=6)
     ax.plot([], [], "o", color=PEDC, ms=11, mec="white", label="pedestrian")
 
     ax.text(0.03, 0.98, f"vx = {sc.v_pdm[ta] * Y.MPH:.0f} mph\ndistance to pedestrian = {d0:.0f} m",
