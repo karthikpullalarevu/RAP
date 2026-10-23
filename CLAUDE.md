@@ -18,6 +18,15 @@
 - Keep distances in metres
 - For braking, give m/s² with the mph-per-second value next to it (1 m/s² = 2.237 mph/s)
 
+## Terminology (use the same words in every plot, table and report)
+- **Closest distance**: shortest distance from the car body (its box, not its centre) to the pedestrian. Say "distance", never "gap", in labels and text
+- **Old loss** = original RAP score loss (BCE on the final score). **New loss** = E6 score loss (5 sub-scores + InfoNCE, 1.5 m pedestrian rule)
+- **+ 0 accel** = ego acceleration input (ax, ay) set to 0 in training and testing (`zero_ego_accel=True`)
+- **Original data** = ped_v2 with PDM-Closed labels (104,936 samples). **Yield-edited data** = cleaned ped_v2 with labels edited to keep 5 m from the pedestrian (61,088 samples)
+- **Original trajectory / edited trajectory** = label before / after the yield edit
+- **RGB** = real camera photos as input. **Raster** = rendered rasters as input
+- Experiments: E4 = old loss, original data · E5 = old loss, yield-edited data · E6 = new loss, yield-edited data · E7 = E6 + 0 accel · E8 = E4 + 0 accel
+
 ## Long-Running Tasks
 - If a task will take more than 5 minutes, run it inside a **tmux session** (not as a background task)
 - Use `tmux new-session -d -s <name>` to create, `tmux send-keys` to run commands

@@ -97,7 +97,7 @@ def plot():
         ax.grid(color="#eeeeee")
         for sp in ("top", "right"):
             ax.spines[sp].set_visible(False)
-    axes[0].set_ylabel("Closest gap, car body to pedestrian (m)", fontsize=12)
+    axes[0].set_ylabel("Closest distance, car body to pedestrian (m)", fontsize=12)
     fig.text(0.5, 0.005, "One dot per training sample at its closest moment within the 5 s label. Red box = under 1 m while "
              f"moving (over {UNSAFE_MPH:g} mph). After leaves out the samples that were too late to stop (dropped).", ha="center",
              fontsize=10, color=MUTED)
