@@ -49,7 +49,7 @@ def main():
     ex, ey, _ = sc.path.pose(r["s"][:m])
 
     plt.rcParams.update({"figure.facecolor": SURFACE, "savefig.facecolor": SURFACE, "axes.facecolor": SURFACE})
-    fig, ax = plt.subplots(figsize=(7, 10))
+    fig, ax = plt.subplots(figsize=(7, 7.5))
     cc, ss = math.cos(oh), math.sin(oh)
     corners = [(ox + a * cc - b * ss, oy + a * ss + b * cc) for a, b in
                [(Y.HALF_LEN, Y.HALF_WID), (Y.HALF_LEN, -Y.HALF_WID), (-Y.HALF_LEN, -Y.HALF_WID), (-Y.HALF_LEN, Y.HALF_WID)]]
@@ -75,19 +75,23 @@ def main():
     ax.plot([], [], "o", color=PEDC, ms=11, mec="white", label="pedestrian")
 
     ax.text(0.03, 0.98, f"vx = {sc.v_pdm[ta] * Y.MPH:.0f} mph\ndistance to pedestrian = {d0:.0f} m",
-            transform=ax.transAxes, fontsize=15, color=INK, va="top")
+            transform=ax.transAxes, fontsize=14, color=INK, va="top")
     xs, ys = P(np.r_[orig[:, 0], ex], np.r_[orig[:, 1], ey])
-    top = max(ys.max(), 10) + 5
-    ax.set_ylim(-5, top)
-    ax.set_xlim(-top * 0.35, top * 0.35)
-    ax.set_aspect("equal")
+    top = max(ys.max(), 10) + 8
+    ax.set_ylim(-4, top)
+    pxs = [P(tr[ta:ta + m, 0], tr[ta:ta + m, 1])[0] for tr in sc.peds]
+    lo = min([-6.0] + [np.nanmin(v) - 1.5 for v in pxs if np.isfinite(v).any()])
+    hi = max([6.0] + [np.nanmax(v) + 1.5 for v in pxs if np.isfinite(v).any()])
+    ax.set_xlim(lo, hi)
+    ax.set_aspect(0.45)                               # metres ahead drawn at 0.45x scale so the plot isn't so tall
     ax.grid(color=GRID, lw=0.6)
     ax.set_axisbelow(True)
     ax.set_ylabel("metres ahead", color=MUTED)
+    ax.set_xlabel("metres", color=MUTED)
     for sp in ax.spines.values():
         sp.set_visible(False)
     ax.tick_params(colors=MUTED)
-    ax.legend(loc="lower right", frameon=False, fontsize=13)
+    ax.legend(loc="lower left", frameon=False, fontsize=12)
     fig.tight_layout()
     out = args.out or str(Y.OUT / f"bev_original_vs_edited_{args.scene[-12:]}_{ta}.png")
     fig.savefig(out, dpi=150)
