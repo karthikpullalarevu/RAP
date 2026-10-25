@@ -33,6 +33,8 @@ from matplotlib.patches import Polygon
 COLORS = {"old loss": "#184f95", "new loss": "#eb6834"}          # dark blue, orange
 MODELS = [(n, c, m, COLORS[n]) for n, c, m, _ in _MODELS]
 PED_C = INK                                                       # pedestrian (orange is taken by the new loss)
+# --grid2x2: the same 4 scenes for RGB and raster, all stoppable with <= 3 m/s2 (6.7 mph/s) of braking
+SCENES_2X2 = [("9e2ca6b821065c6c", 2), ("f02aa91af18752f8", 1), ("dd7690a34f97529e", 1), ("32e05d8aad845364", 2)]
 
 
 def draw_image_full(ax, img, cam, plans):
@@ -97,7 +99,7 @@ def main():
     agents = [(n, V.load_agent(str(c), m), col) for n, c, m, col in MODELS]
     dets = {(e["token"], e["suffix"]): e["detections"] for e in json.load(open(B.LIDAR_RESULTS))}
     from navsim.common.dataloader import SceneLoader, SceneFilter
-    want = {t for _, t, _, _ in EXAMPLES}
+    want = {t for _, t, _, _ in EXAMPLES} | {t for t, _ in SCENES_2X2}
     logs, found = set(), set()
     for pkl in sorted(glob.glob(os.path.join(B.TEST_LOGS, "*.pkl"))):
         for fr in pickle.load(open(pkl, "rb")):
@@ -110,7 +112,7 @@ def main():
                          sensor_config=agents[0][1].get_sensor_config())
 
     for inp, name in (("photo", "rgb"), ("raster", "raster")):
-        exs = [e for e in EXAMPLES if e[0] == inp]
+        exs = [(inp, t, v, "") for t, v in SCENES_2X2] if args.grid2x2 else [e for e in EXAMPLES if e[0] == inp]
         if args.grid2x2:
             fig, axes = plt.subplots(2, 4, figsize=(20, 8.0), gridspec_kw={"width_ratios": [16 / 9, 1, 16 / 9, 1]})
         else:
