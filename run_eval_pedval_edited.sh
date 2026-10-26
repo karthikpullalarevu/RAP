@@ -10,6 +10,8 @@ export NUPLAN_MAP_VERSION="nuplan-maps-v1.0" NUPLAN_MAPS_ROOT="/datahdd/karthik/
 export NAVSIM_EXP_ROOT="/datahdd/karthik/RAP/exp" NAVSIM_DEVKIT_ROOT="/datahdd/karthik/RAP/navsim"
 export OPENSCENE_DATA_ROOT="/datahdd2/karthik/dataset/nuplan-v1.1" TMPDIR=/datahdd2/karthik/tmp
 export ip_head="128.2.220.69:6379" redis_password="dummy" num_nodes="1"
+# one maths thread per scoring worker: 5 models x 32 workers otherwise oversubscribe the CPUs badly
+export OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 NUMEXPR_NUM_THREADS=1
 CACHE=/datahdd2/karthik/ped_v2/cache/val_yield_edited
 SAMPLES=/datahdd2/karthik/ped_v2/analysis/09_yield_edit/val/val_samples_edited.csv
 
